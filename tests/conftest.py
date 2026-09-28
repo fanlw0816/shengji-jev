@@ -1,6 +1,11 @@
+import os
 from pathlib import Path
 
 import pytest
+
+# Qt 测试必须在 offscreen 平台下跑（无人值守环境没有真实显示）。
+# 必须在任何 PySide6 导入之前设置，因此放在 conftest 顶层。
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 FIXTURES = Path(__file__).parent / "fixtures" / "screenshots"
 

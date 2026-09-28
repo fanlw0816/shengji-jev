@@ -166,3 +166,52 @@ def all_trumps(trump: TrumpInfo, decks: int = 2) -> list[Card]:
             for _ in range(decks):
                 out.append(Card(rank=rank, suit=trump.suit))
     return out
+
+
+# --- 主牌规格解析（CLI 与配置文件用）---
+
+_SPEC_SUITS: dict[str, int] = {
+    "S": 0, "H": 1, "D": 2, "C": 3,
+    "♠": 0, "♥": 1, "♦": 2, "♣": 3,
+}
+_NO_TRUMP_PREFIXES = ("NOTRUMP", "NO_TRUMP", "NT", "N", "无主", "无将")
+
+
+def _parse_level(token: str) -> int:
+    from ..cards import RANK_LABELS
+
+    t = token.strip().upper()
+    if not t:
+        raise ValueError("缺少级牌点数")
+    if t.isdigit():
+        n = int(t)
+        if 2 <= n <= 14:
+            return n
+        raise ValueError(f"级牌点数超出 2..14: {token!r}")
+    rev = {v: k for k, v in RANK_LABELS.items()}
+    if t in rev:
+        return rev[t]
+    raise ValueError(f"无法识别的级牌点数: {token!r}")
+
+
+def parse_trump(spec: str) -> TrumpInfo:
+    """把 "S2" / "H10" / "♠A" / "NT5" / "无主5" 解析为 TrumpInfo。
+
+    格式：主花色字母 + 级牌点数；无主用 NT / N / 无主 / 无将 前缀。
+    """
+    s = spec.strip().replace(" ", "")
+    if not s:
+        raise ValueError("空的主牌规格")
+
+    for prefix in _NO_TRUMP_PREFIXES:
+        if s.upper().startswith(prefix.upper()) and len(s) > len(prefix):
+            return TrumpInfo(kind="no_trump", suit=None,
+                             level_rank=_parse_level(s[len(prefix):]))
+
+    first = s[0]
+    suit = _SPEC_SUITS.get(first) if first in _SPEC_SUITS else _SPEC_SUITS.get(first.upper())
+    if suit is None:
+        raise ValueError(f"无法识别主花色: {spec!r}（可用 S/H/D/C/♠/♥/♦/♣，无主用 NT）")
+    if len(s) < 2:
+        raise ValueError(f"缺少级牌点数: {spec!r}")
+    return TrumpInfo(kind="suit", suit=suit, level_rank=_parse_level(s[1:]))

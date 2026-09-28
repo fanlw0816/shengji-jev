@@ -16,14 +16,14 @@
 | Plan 3 | 事件层（状态机 / 去重 / 墩边界 / 待确认队列） | ✅ | 54 项测试，含真实截图离线回放 |
 | Plan 4a | 牌局引擎：主牌次序 + 墩赢家 | 🟡 | 51 项测试通过；甩牌判定未实现 |
 | Plan 4b | 牌局引擎：记账模型 | ✅ | 25 项测试通过；三类重复扣减缺陷均有回归测试 |
-| Plan 5 | 悬浮窗 UI（PySide6） | ⬜ | — |
+| Plan 5 | 悬浮窗 UI（PySide6） | 🟡 | 显示/热键/穿透已完成；**交互式纠正面板未做** |
 | Plan 6 | 按家推断（功能 B） | ⬜ | — |
 
-**当前测试：264 项全部通过。**
+**当前测试：364 项全部通过。**
 
 ```bash
 uv sync
-uv run pytest                       # 264 passed
+uv run pytest                       # 364 passed
 ```
 
 ---
@@ -156,15 +156,32 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 
 ---
 
-## Plan 5 — 悬浮窗 UI ⬜
+## Plan 5 — 悬浮窗 UI 🟡
 
-- [ ] PySide6 无边框置顶小窗（默认鼠标穿透）
-- [ ] 剩余牌统计面板
-- [ ] 各家推断面板
-- [ ] 墩次/分数面板
-- [ ] 全局热键：`Ctrl+Alt+L` 切换交互模式、`Ctrl+Alt+O` 强制快照、`Ctrl+Alt+P` 暂停
-- [ ] 低置信纠正流程
-- [ ] 降级模式提示
+- [x] `session.py` 会话状态（事件 → 可显示状态，与 Qt 无关，纯单测覆盖）
+- [x] `ui/viewmodel.py` 视图模型（状态 → 渲染数据，纯函数）
+- [x] `ui/overlay.py` PySide6 无边框置顶小窗，**默认鼠标穿透**
+- [x] 剩余牌统计面板（4 花色 × 13 点数 + 大小王）
+- [x] 墩次 / 分数面板（各家分数）
+- [x] 状态行分三级：运行中 / 降级或待确认（warn）/ 无采集后端（error）
+- [x] `ui/hotkeys.py` 全局热键：`Ctrl+Alt+L` 交互、`Ctrl+Alt+O` 强制重读、`Ctrl+Alt+P` 暂停
+- [x] `ui/app.py` 应用控制器（`tick_once()` 可注入假后端做确定性测试）
+- [x] `tools/run_counter.py` CLI 入口
+- [x] 降级模式提示（mss → 15Hz、无后端 → error）
+- [x] 待确认计数显示（低置信 / 漏抓分开计）
+- [ ] **交互式纠正面板**：目前只显示"有 N 项待确认"，
+      还不能在悬浮窗里点选改正某一张牌
+- [ ] 各家推断范围面板（属 Plan 6 的功能 B，UI 侧未做）
+
+详见 [UI 层文档](docs/superpowers/plans/2026-09-28-ui.md)。
+
+**实施中修正的 Qt 缺陷**：
+
+`setAttribute(WA_TransparentForMouseEvents, ...)` 会把
+`WindowTransparentForInput` 标志**重新加回来**，
+所以必须**先设属性、后设窗口标志**。原顺序反了会导致
+**鼠标穿透永远关不掉**，纠正流程也就永远点不到。
+已在 `overlay.apply_interactive` 注释中记录，并有测试覆盖。
 
 ---
 
@@ -221,6 +238,7 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | [Plan 1 计划 + 实施结果](docs/superpowers/plans/2026-09-28-capture-and-layout.md) | 采集/锚定/标定 |
 | [Plan 2 识别层](docs/superpowers/plans/2026-09-28-recognition.md) | 识别层 + 模板标注流程 |
 | [Plan 3 事件层](docs/superpowers/plans/2026-09-28-events.md) | 状态机 / 去重 / 看门狗 / 待确认队列 |
+| [Plan 5 UI 层](docs/superpowers/plans/2026-09-28-ui.md) | 悬浮窗 / 热键 / 鼠标穿透 |
 | [调研笔记](docs/research/2026-09-28-prior-art-and-risks.md) | 同类工具、开源先例、未核实项 |
 | [文档索引](docs/README.md) | 全部文档与 spike 实测脚本对照表 |
 
@@ -237,3 +255,4 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | 2026-09-28 | Plan 4a 引擎核心，185 项测试 |
 | 2026-09-28 | Plan 4b 记账模型，210 项测试；关联远程仓库 |
 | 2026-09-28 | Plan 3 事件层（状态机/去重/看门狗/待确认队列），264 项测试 |
+| 2026-09-28 | Plan 5 UI 层（会话状态/视图模型/悬浮窗/全局热键/CLI），364 项测试 |
