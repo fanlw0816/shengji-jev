@@ -1,0 +1,119 @@
+[
+  {
+    "index": 0,
+    "state": "others_one",
+    "zone": "top",
+    "slot": 0,
+    "file": "corner_00_others_one_top_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 1,
+    "state": "others_one",
+    "zone": "left",
+    "slot": 0,
+    "file": "corner_01_others_one_left_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 2,
+    "state": "others_one",
+    "zone": "right",
+    "slot": 0,
+    "file": "corner_02_others_one_right_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 3,
+    "state": "next_two",
+    "zone": "right",
+    "slot": 0,
+    "file": "corner_03_next_two_right_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 4,
+    "state": "next_two",
+    "zone": "right",
+    "slot": 1,
+    "file": "corner_04_next_two_right_s1.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 5,
+    "state": "all_two",
+    "zone": "top",
+    "slot": 0,
+    "file": "corner_05_all_two_top_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 6,
+    "state": "all_two",
+    "zone": "top",
+    "slot": 1,
+    "file": "corner_06_all_two_top_s1.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 7,
+    "state": "all_two",
+    "zone": "left",
+    "slot": 0,
+    "file": "corner_07_all_two_left_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 8,
+    "state": "all_two",
+    "zone": "left",
+    "slot": 1,
+    "file": "corner_08_all_two_left_s1.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 9,
+    "state": "all_two",
+    "zone": "right",
+    "slot": 0,
+    "file": "corner_09_all_two_right_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 10,
+    "state": "all_two",
+    "zone": "right",
+    "slot": 1,
+    "file": "corner_10_all_two_right_s1.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 11,
+    "state": "all_two",
+    "zone": "bottom",
+    "slot": 0,
+    "file": "corner_11_all_two_bottom_s0.png",
+    "rank": "",
+    "suit": ""
+  },
+  {
+    "index": 12,
+    "state": "all_two",
+    "zone": "bottom",
+    "slot": 1,
+    "file": "corner_12_all_two_bottom_s1.png",
+    "rank": "",
+    "suit": ""
+  }
+]

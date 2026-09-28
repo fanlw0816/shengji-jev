@@ -16,12 +16,14 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| Plan 1 | 采集 · 锚定 · 标定基础 | ✅ **已实现并验证**（82 项测试通过） |
-| Plan 2 | 识别层（点数 13 类 + 花色 4 类、投票、置信度） | ⬜ 待实现（需真实牌面样本） |
+| Plan 1 | 采集 · 锚定 · 标定基础 | ✅ **已实现并验证** |
+| Plan 2 | 识别层（点数 13 类 + 花色 4 类、投票、置信度） | 🟡 **框架已实现并验证**；真实模板库待人工标注 |
 | Plan 3 | 事件层（区状态机、判稳、去重、墩边界、待确认队列） | ⬜ |
 | Plan 4 | 牌局引擎（墩赢家规则 + 记账模型） | ⬜ |
 | Plan 5 | 悬浮窗 UI（PySide6） | ⬜ |
 | Plan 6 | 按家推断（功能 B） | ⬜ |
+
+**当前测试：134 项全部通过**（`uv run pytest`）。
 
 ---
 
@@ -31,7 +33,7 @@
 
 ```bash
 uv sync                 # 建虚拟环境并安装依赖（含可编辑安装本项目）
-uv run pytest -q        # 跑测试（82 项，含 4 张真实截图的端到端验收）
+uv run pytest -q        # 跑测试（134 项，含 4 张真实截图的端到端验收）
 ```
 
 ### 工具
@@ -51,6 +53,17 @@ uv run python -m shengji.tools.record --seconds 600 --out samples
 
 它用「变化触发」逻辑自动抓取，**不需要人工盯着那几秒的显示窗口**。
 
+**建立识别模板库**（需要你给 17 个字形贴标签，约 5 分钟）：
+
+```bash
+uv run python -m shengji.tools.label_templates extract --samples samples --work templates_work
+# 打开 templates_work/labels.json 给每个簇填 label，对照同目录的 cluster*.png
+uv run python -m shengji.tools.label_templates build --work templates_work --out templates.json
+```
+
+模板库是识别层唯一需要人工介入的环节——本质上是"给 13 个点数 + 4 个花色字形起名字"，
+无法自动化。
+
 如果报「未找到游戏窗口」，列出当前窗口标题以确定关键字：
 
 ```bash
@@ -67,7 +80,11 @@ uv run python -c "from shengji.window.win32 import find_windows_by_title as f; [
 DXGI 抓屏 ──> 牌面块检测 ──> 就近归属到四区 ──> 状态机判稳
    (60Hz)                                        │ SETTLED
                                                  ▼
-                                     识别（点数13类 + 花色4类）
+                                    切角标切片（每张牌左侧 16×28）
+                                                 ▼
+                              点数分类器(13) + 花色分类器(4)
+                                                 ▼
+                                  3 帧多数投票 + 置信度评估
                                                  ▼
                               PlayEvent(seat, cards, confidence)
                                                  ▼
@@ -75,6 +92,13 @@ DXGI 抓屏 ──> 牌面块检测 ──> 就近归属到四区 ──> 状态
                                                  ▼
                                          悬浮窗刷新
 ```
+
+### 识别层的关键事实
+
+叠放时每张牌只露出左侧 **16px**，但**点数与花色的角标正好在这 16px 内完整可见**——
+客户端把角标做得足够窄，正是为了叠放时仍可读。所以识别单元不是整张牌，
+而是 `16×28` 的角标切片；角标内**点数在上、花色在下，中间有干净空隙**（中位 row=14），
+可自动切分，因此只需 **13 + 4 = 17 次匹配**而非 54 次。
 
 ### 三个关键设计决定
 
