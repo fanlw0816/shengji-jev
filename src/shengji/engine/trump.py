@@ -1,0 +1,168 @@
+"""主牌判定与牌力次序。
+
+依据设计文档 §7.6。**级牌是关键**：升级中当前级数对应的点数是主牌，
+初版设计曾遗漏它，会导致墩赢家判错。
+
+完整次序（从大到小）：
+
+    大王 > 小王
+         > 正级（主花色 L）
+         > 副级（其余三门的 L）
+         > 主花色 A > K > Q > J > 10 > ... > 2   （跳过 L）
+         > 任意副牌（每门内 A > K > ... > 2）
+
+无主局：大小王为主牌；四门 L 均为主牌，无正/副级之分。
+
+⚠️ **待实测确认**（设计文档 §7.6.3）：副级三门之间是否可互相比较，
+不同规则集有差异。本模块的默认实现是「副级之间同级、不可互压」
+（`TrumpInfo.off_level_ordered=False`），可通过参数切换为按花色次序比较。
+该差异**直接影响墩赢家与分牌归属**，必须用实际客户端对局验证。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from ..cards import JOKER_BIG, JOKER_SMALL, Card
+
+# 分组标识：主牌用 -1，副牌用花色号 0..3
+GROUP_TRUMP = -1
+
+# 牌力层级（数值越大越强）
+TIER_SIDE = 1        # 副牌
+TIER_TRUMP_SUIT = 2  # 主花色的普通牌
+TIER_OFF_LEVEL = 3   # 副级
+TIER_MAIN_LEVEL = 4  # 正级
+TIER_SMALL_JOKER = 5
+TIER_BIG_JOKER = 6
+
+
+@dataclass(frozen=True)
+class TrumpInfo:
+    """当前主牌信息。"""
+
+    kind: Literal["suit", "no_trump"]
+    suit: int | None          # kind == "suit" 时为主花色
+    level_rank: int           # 当前级数 2..14
+
+    def __post_init__(self) -> None:
+        if self.kind == "suit" and self.suit is None:
+            raise ValueError("kind='suit' 时必须给出主花色")
+        if not (2 <= self.level_rank <= 14):
+            raise ValueError(f"非法级数: {self.level_rank}")
+
+    @property
+    def level_label(self) -> str:
+        from ..cards import RANK_LABELS
+
+        return RANK_LABELS[self.level_rank]
+
+    def describe(self) -> str:
+        if self.kind == "no_trump":
+            return f"无主，级牌 {self.level_label}"
+        assert self.suit is not None
+        from ..cards import SUIT_LABELS
+
+        return f"主 {SUIT_LABELS[self.suit]}，级牌 {self.level_label}"
+
+
+def is_joker(card: Card) -> bool:
+    return card.joker != 0
+
+
+def is_trump(card: Card, trump: TrumpInfo) -> bool:
+    """是否为主牌。"""
+    if is_joker(card):
+        return True
+    if card.rank == trump.level_rank:
+        # 任何花色的级牌都是主牌
+        return True
+    return trump.kind == "suit" and card.suit == trump.suit
+
+
+def group_of(card: Card, trump: TrumpInfo) -> int:
+    """返回牌所属的比较分组：GROUP_TRUMP 或花色号。"""
+    return GROUP_TRUMP if is_trump(card, trump) else card.suit
+
+
+def card_strength(card: Card, trump: TrumpInfo) -> tuple[int, int]:
+    """牌力键，元组越大越强。只在同一分组内比较才有意义，跨组由调用方处理。"""
+    if card.joker == JOKER_BIG:
+        return (TIER_BIG_JOKER, 0)
+    if card.joker == JOKER_SMALL:
+        return (TIER_SMALL_JOKER, 0)
+
+    if card.rank == trump.level_rank:
+        if trump.kind == "suit" and card.suit == trump.suit:
+            return (TIER_MAIN_LEVEL, 0)     # 正级
+        return (TIER_OFF_LEVEL, 0)          # 副级（默认同级）
+
+    if trump.kind == "suit" and card.suit == trump.suit:
+        return (TIER_TRUMP_SUIT, card.rank)
+    return (TIER_SIDE, card.rank)
+
+
+def compare(cards_a: tuple[Card, ...], cards_b: tuple[Card, ...],
+            trump: TrumpInfo) -> int:
+    """比较两组同结构牌的大小。返回 1 / 0 / -1。
+
+    约定：只比较**结构相同**的两组（对子比对子、拖拉机对拖拉机）。
+    结构不同时由 trick 模块负责判定，不在此处理。
+    """
+    ka = _top_of(cards_a, trump)
+    kb = _top_of(cards_b, trump)
+    ga = group_of(cards_a[0], trump)
+    gb = group_of(cards_b[0], trump)
+    # 主牌组整体大于任意副牌组
+    if ga == GROUP_TRUMP and gb != GROUP_TRUMP:
+        return 1
+    if gb == GROUP_TRUMP and ga != GROUP_TRUMP:
+        return -1
+    if ga != gb:
+        raise ValueError("不同副牌花色之间不可比较大小")
+    if ka > kb:
+        return 1
+    if ka < kb:
+        return -1
+    return 0
+
+
+def _top_of(cards: tuple[Card, ...], trump: TrumpInfo) -> tuple[int, int]:
+    """一组牌里最强的那张的牌力键（拖拉机以最高对子为准，取最大值即可）。"""
+    return max(card_strength(c, trump) for c in cards)
+
+
+def sort_desc(cards: list[Card], trump: TrumpInfo) -> list[Card]:
+    """按牌力从大到小排序。主牌在前，同组内按牌力。"""
+    def key(c: Card) -> tuple:
+        grp = group_of(c, trump)
+        grp_rank = 1 if grp == GROUP_TRUMP else 0
+        return (grp_rank, card_strength(c, trump), c.suit, c.rank)
+
+    return sorted(cards, key=key, reverse=True)
+
+
+def all_trumps(trump: TrumpInfo, decks: int = 2) -> list[Card]:
+    """列出当前主牌集合（含级牌与大小王），用于记牌统计。
+
+    ⚠️ 注意：**四门花色的级牌都是主牌**，不只是主花色的那一张。
+    早期实现只加了主花色的级牌，两副牌下会少算 6 张主牌。
+    """
+    out: list[Card] = []
+    for _ in range(decks):
+        out.append(Card.big_joker())
+        out.append(Card.small_joker())
+    # 四门级牌一律是主牌
+    for s in (0, 1, 2, 3):
+        for _ in range(decks):
+            out.append(Card(rank=trump.level_rank, suit=s))
+    # 主花色的其余点数
+    if trump.kind == "suit":
+        assert trump.suit is not None
+        for rank in range(2, 15):
+            if rank == trump.level_rank:
+                continue
+            for _ in range(decks):
+                out.append(Card(rank=rank, suit=trump.suit))
+    return out
