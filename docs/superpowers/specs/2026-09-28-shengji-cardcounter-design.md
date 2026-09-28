@@ -1,7 +1,7 @@
 # 升级（拖拉机）记牌器 — 设计文档
 
 - **日期**：2026-09-28
-- **状态**：待评审（第 2 稿，已处理第 1 轮评审意见）
+- **状态**：待评审（第 3 稿，已处理第 2 轮评审意见）
 - **目标平台**：Windows 11（本机 26200，RTX 5060 Ti，双 2560×1440 @60Hz）
 - **定位**：自用工具（不考虑分发、安装包、多屏适配）
 
@@ -68,15 +68,27 @@
 | 点数分类器 | **13** | A,2..10,J,Q,K（角标数字/字母） |
 | 花色分类器 | **4** | ♠♥♦♣（角标花色符号） |
 
-每张牌只需 13 + 4 = **17 次匹配**，而非 54 次：
+每张牌只需 13 + 4 = **17 次匹配**，而非 54 次。
+
+**成本必须以「本区牌张数」为单位表达**（识别是逐区进行的，见 §5.1 `recognize(zone)`）：
 
 ```
-8 张牌 × 17 次 × 0.145 ms ≈ 19.7 ms / 帧
-3 帧投票                ≈ 59 ms / 墩
+单区单帧成本 = cards_in_zone × 17 × 0.145 ms
+单墩成本     = Σ_zone( cards_in_zone × 17 × 0.145 ms ) × 3 帧投票
 ```
+
+| 场景 | 单区牌数 | 单区单帧 | **单墩成本** |
+|---|---|---|---|
+| 4 人·常态（每区 1 张） | 1 | 2.5 ms | **29.6 ms** |
+| 4 人·最坏（每区甩牌 8 张） | 8 | 19.7 ms | **236.6 ms** |
+| 6 人·常态（每区 1 张） | 1 | 2.5 ms | **44.4 ms** |
+| 6 人·最坏（每区甩牌 8 张） | 8 | 19.7 ms | **355.0 ms** |
+
+> 初稿此处残留了「8 张牌/帧」这一 4 人假设（来自被废弃的整桌识别方案）。
+> 6 人 3 副变体下区数与每区牌数都不同，故必须按上式重算。
 
 **投票策略**：只对 **3 帧**（而非 7 帧）做识别并逐张多数投票；其余帧仅用于判稳检测。
-59 ms/墩、每墩间隔数秒，CPU 压力可忽略。
+即使最坏情况 355 ms/墩，而每墩间隔数秒，占空比仍 **< 5%**，CPU 压力可忽略。
 
 > **踩坑记录**：早期一次测量得出 "dxcam 只有 12 FPS"，是**测量方法缺陷**（用 `latest_frame_ticks` 计数）造成的假象。后续用 mss 作为地面真值交叉验证，确认 dxcam 实际为 46.7 FPS。设计结论以地面真值版本为准。
 
@@ -95,6 +107,15 @@ dxcam 底层为 Desktop Duplication API，`grab()` 在屏幕未变化时返回 `
 |---|---|---|---|---|
 | **采集中** | 游戏窗口存在且未最小化 | **16.7 ms（60 Hz）** | 0.038 ms（无变化）/ 0.042 ms（有变化） | ≈ **0.25% 单核** |
 | **挂起** | 窗口最小化 / 不存在 / 用户暂停 | 200 ms（5 Hz） | 同上 | ≈ 0.02% 单核 |
+
+**变化侦测与 ROI 的关系（本稿澄清）**：
+
+- **变化侦测用全输出抓帧**（`grab(region=None)`，即整个显示器），因为 Desktop Duplication
+  的"是否有新帧"判据是**整个输出**级别，无法只订阅某几个矩形
+- **识别时才切 ROI**：拿到全帧后在 numpy 里切片（切片成本可忽略，见 §3）
+- 因此 §3 表中 `grab()` 的 0.038 / 0.042 ms **均为全输出测量值**，已包含这个模式的成本
+- 代价：显示器上**任何**区域变化都会产生新帧，即使与本游戏无关。这由 §4.3 的
+  逐区差分吸收——非目标区域的变化不会让任何区离开 `EMPTY`
 
 > 初稿曾设"IDLE 100 Hz / ACTIVE 60 Hz"两档，但该分档**成本是反的**（100 Hz 比 60 Hz 更贵）。
 > 由于无变化时 `grab()` 本就瞬时返回 `None`，**无需为"没事发生"设更慢的档位**。
@@ -160,7 +181,11 @@ EMPTY ──变化──> ENTERING ──连续8帧差异<阈值──> SETTLED
 
 - 每次出牌事件：仅存 1 张投票后的稳定帧 PNG
 - **仅当置信度 < 阈值**：才保存该次 3 帧完整爆发，供调试与模板挖掘
-- 上限：一局约 200 手 ≈ 40 MB
+- **粒度与上限（本稿澄清）**：4 人局一局约 25 墩 ≈ **100 次出牌**，故 200 手 ≈ 2 局。
+  正常模式约 0.2 MB/手 → 一局 ≈ 20 MB。
+  低置信爆发保存设**硬上限 200 次/局**（约 60 MB），超出后只存计数与元数据，
+  并在 UI 提示"证据保存已达上限"
+- 所有落盘文件按 `deal_id/trick_index/seat` 组织，便于 L3/L4 离线回放取用
 
 ---
 
@@ -194,24 +219,54 @@ EMPTY ──变化──> ENTERING ──连续8帧差异<阈值──> SETTLED
 ### 5.1 关键接口与载荷
 
 ```python
+# ---- 可替换接口 ----
+
 class CaptureBackend(Protocol):
-    def grab(self, region: Region) -> Frame | None: ...
+    def grab(self, region: Region | None) -> Frame | None: ...
     def close(self) -> None: ...
 
 class CardRecognizer(Protocol):
     def recognize(self, zone: GrayFrame) -> RecognitionResult: ...
 
+# ---- 变体规则（§7.1）与运行时配置（§11.2）是两个不同层次，本稿明确区分 ----
+
+@dataclass(frozen=True)
+class VariantRule:
+    """静态规则数据：某个 (players, decks) 变体的固定属性。"""
+    players: int
+    decks: int
+    hand_size: int
+    bottom_size: int
+    source: str            # "measured" | "documented" | "UNVERIFIED"
+
+@dataclass(frozen=True)
+class Thresholds:
+    min_card_score: float      # 逐张置信度下限
+    min_frame_agreement: float # 3 帧一致率下限
+
+@dataclass(frozen=True)
+class GameConfig:
+    """从 §11.2 JSON 载入的运行时配置，供引擎与 UI 共同使用。"""
+    rule: VariantRule
+    zone_to_seat: tuple[int, ...]          # 区索引 -> 座位索引
+    turn_direction: Literal["cw", "ccw"]
+    first_lead_seat: int
+    thresholds: Thresholds
+
+# ---- 牌张编码 ----
+
 @dataclass(frozen=True)
 class Card:
-    rank: int          # 1..13 (A=1 或 14，见 §7)
-    suit: int          # 0..3，大小王用专用值
-    joker: int | None  # None / small / big
+    rank: int          # 2..14，其中 J=11 Q=12 K=13 A=14（A 大于 K，见 §7.6）
+    suit: int          # 0..3 = ♠♥♦♣
+    joker: int | None  # None / 1=小王 / 2=大王；非 None 时 rank/suit 无意义
 
 @dataclass(frozen=True)
 class RecognitionResult:
     cards: tuple[Card, ...]
-    confidence: float                      # 0.0~1.0，整区最低单张置信度
-    per_card_scores: tuple[float, ...]     # 逐张置信度
+    confidence: float                      # = min(per_card_scores)，见下方门槛定义
+    per_card_scores: tuple[float, ...]
+    frame_agreement: float                 # 3 帧投票一致率 0.0~1.0
 
 @dataclass(frozen=True)
 class PlayEvent:
@@ -229,12 +284,23 @@ class GameState:
     current_player: int
     trump: TrumpInfo               # 主牌花色 / 无主 / 大小王对
     unseen: Mapping[Card, int]     # 未见牌池计数
-    per_seat_candidates: tuple[frozenset[Card], ...]   # 功能 B：可靠超集
+    per_seat_candidates: tuple[frozenset[Card], ...]   # 功能 B：最紧可靠超集
     per_seat_certain: tuple[frozenset[Card], ...]      # 必然持有（可空）
     tricks_won: tuple[int, ...]
     points: tuple[int, ...]
     phase: DealPhase
+    pending: tuple[PendingItem, ...]   # 待确认队列，见 §9.2
 ```
+
+**低置信门槛是「两个独立阈值的合取」（本稿澄清）**：
+
+```
+触发人工纠正  ⟺  confidence < min_card_score
+                 OR  frame_agreement < min_frame_agreement
+```
+
+即**任一不达标**即触发，而非取平均。`confidence` 字段本身定义为 `min(per_card_scores)`
+（整区最低单张分），`frame_agreement` 单独成字段，避免把两个不同来源的量混成一个数。
 
 ### 5.2 三个刻意的解耦决定
 
@@ -266,14 +332,7 @@ class GameState:
 **修正：`(decks, players)` 不是自由笛卡尔积，而是一张需要外部规则数据的查找表。**
 
 ```python
-@dataclass(frozen=True)
-class VariantRule:
-    players: int
-    decks: int
-    hand_size: int        # 每人手牌数
-    bottom_size: int      # 底牌张数
-    source: str           # "measured" | "documented:<url>" | "unverified"
-
+# VariantRule 定义见 §5.1
 VARIANT_RULES: dict[tuple[int, int], VariantRule] = {
     (4, 2): VariantRule(4, 2, 25, 8,  source="documented"),   # 25×4 + 8 = 108 ✓
     (6, 3): VariantRule(6, 3, 25, 12, source="UNVERIFIED"),   # 需 Phase 0 实测
@@ -309,24 +368,79 @@ DEAL（发牌） → DECLARE（亮主） → COUNTER_DECLARE（反主）
 > 评审意见已采纳：初稿把这块含糊地写成"规则、计分、主牌判定"。本稿明确其为 C 的前置依赖
 > 与 Phase 3 的主要工作量。
 
-### 7.4 记牌推理（功能 B）—— 输出契约（本稿修正）
+### 7.4 记牌推理（功能 B）—— 输出契约与底牌记账
 
-初稿"输出各家可能的牌型范围"过于模糊，验收不可测。**修正为确定性可靠超集**：
+#### 7.4.1 底牌记账（本稿修正，原公式有重复扣减缺陷）
 
-$$\text{unseen} = \text{full\_deck} - \text{自己手牌} - \text{已打出} - \text{已亮底牌}$$
+初稿公式 `unseen = full_deck − 自己手牌 − 已打出 − 已亮底牌` **只在两个被减集合互斥时才成立**，
+而实际上它们不互斥：庄家在「看底牌」后把 8 张扣回底牌，**系统观测到的庄家手牌（25 张）
+已经是他扣底之后的状态**，那 8 张底牌中有他留下的牌。对这部分牌重复扣减会使
+`unseen[card]` 归零，把实际还在别家手上的牌排除出 `per_seat_candidates`，
+从而破坏 §10 的验收标准 —— 正是 §9 明令禁止的"静默算错"。
 
-- **`per_seat_candidates[seat]`（可靠超集）**：一致性约束下该家**可能仍然持有**的牌的集合。
-  必须满足 **`ground_truth ⊆ candidates`** —— 这是可自动验证的验收标准。
-- **`per_seat_certain[seat]`（必然持有）**：能由约束推导出必然在该家的牌（如该花色剩余数
-  已被"其余各家都不可能持有"逼死）。允许为空集。
+**修正后的记账模型**：以**互斥快照**构造已知集合，扣底被建模为**知识事件**而非新的扣减。
+
+```
+发牌后（扣底前）    ：每家 hand_size 张；底牌 bottom_size 张面朝下
+若用户是庄家：
+    看底牌阶段 → 快照 bottom_snapshot（bottom_size 张），记入 known
+    扣底阶段   → 8 张从庄家手上移入底牌 → 这是知识事件：
+                 known 集合总量不变（hand_size + bottom_size 张），
+                 unseen 不因此发生任何变化
+
+已知集合 known = hand_snapshot ∪ bottom_snapshot     （构造时断言二者互斥）
+unseen = full_deck − known − played
+```
+
+| 用户身份 | known 大小（4 人 2 副） | 底牌可见性 | 是否报警 |
+|---|---|---|---|
+| 庄家 | 25 + 8 = **33** | 看底牌阶段可见 | — |
+| 非庄家 | **25** | 不可见 | **不报警**（见下） |
+
+**底牌不可见是正常状态**：若用户不是庄家，或底牌区为空/未出现，则 `bottom_snapshot = ∅`，
+`known` 更小、`unseen` 更大、`candidates` 更宽 —— **结果仍然 sound**，
+只是推断更松。因此底牌区不可见**必须不触发** §9 的遮挡报警。
+
+构造 `known` 时必须断言：`|known| == hand_size + (bottom_size if 可见 else 0)`，
+且 `hand_snapshot ∩ bottom_snapshot == ∅`。断言失败即视为识别错误，走 §9 流程。
+
+#### 7.4.2 输出契约
+
+- **`per_seat_candidates[seat]`（最紧可靠超集）**：定义为
+  *「在所有与已记录事件历史一致的牌局世界中，`seat` 可能持有的牌的并集」*。
+  必须满足 **`ground_truth[seat] ⊆ candidates[seat]`**（soundness）。
+- **`per_seat_certain[seat]`（必然持有）**：能由约束推导出必然在该家的牌。必须满足
+  **`certain[seat] ⊆ ground_truth[seat]`**。允许为空集。
 
 **明确不做概率推断**：不输出每张牌的概率或期望值（YAGNI，且无客观验收标准）。
+
+#### 7.4.3 为什么必须定义"最紧"
+
+仅要求 `ground_truth ⊆ candidates` 是**可被平凡满足的**——直接返回整个 `unseen` 池给每一家
+就恒成立，等于没有实现任何推断。因此 §10 与 §14 的验收必须同时包含
+**排除性断言**（可证必然在别家的牌，不得出现在本家 candidates 中），
+详见 §10 功能 B 专项验收。
 
 ### 7.5 座位与出牌方向
 
 - 区→座位映射**不是**隐式约定，而是校准配置的一部分（客户端座位方位与出牌方向不一定固定）
 - 配置项：`zone_to_seat: list[int]`、`turn_direction: "cw" | "ccw"`、`first_lead_seat`
 - 4 人局区名使用屏幕方位（`bottom`=自己 / `left` / `top` / `right`）；6 人局由标定流程按实际布局生成
+
+### 7.6 牌张大小与主牌次序约定
+
+牌张编码见 §5.1（`rank: 2..14`，J=11 Q=12 K=13 **A=14**，即 **A 大于 K**；
+另有大王 > 小王）。完整的**牌力次序**由主牌判定决定，引擎中单点定义：
+
+```
+主牌（从大到小）: 大王 > 小王 > 主花色 A > K > Q > J > 10 > ... > 2
+副牌（每门花色内）: A > K > Q > J > 10 > ... > 2
+主牌 > 任意副牌
+无主局：大小王为主牌，其余按点数比较
+```
+
+对子、连对（拖拉机）的比较要求**结构相同**（对子比对子）且遵循同一主/副次序。
+该次序表是 §7.3 墩赢家判定的唯一权威来源，不在他处重复定义。
 
 ---
 
@@ -350,9 +464,11 @@ $$\text{unseen} = \text{full\_deck} - \text{自己手牌} - \text{已打出} - \
 
 | 失败模式 | 检测方式 | 处置 |
 |---|---|---|
-| 识别置信度低于阈值 | 投票一致率 < 阈值 | 暂停自动流程，悬浮窗高亮 + 展示该帧画面 + 手动纠正 |
-| 出牌一闪而过 | 判稳前区域又变化 | 记 `missed_play`，标黄提示手动补录 |
+| 识别置信度低于阈值 | `confidence < min_card_score` **或** `frame_agreement < min_frame_agreement`（§5.1） | 进入 §9.1 待确认队列；采集与状态机**不中断** |
+| 出牌一闪而过 | 判稳前区域又变化 | 记 `missed_play` 入 §9.1 待确认队列（`reason=missed_play`） |
 | ROI 被遮挡 | 识别结果与所有已知牌型均不匹配 | 报警"牌桌区被遮挡"，提示移开窗口 |
+| **底牌区不可见/为空** | — | **正常状态，不报警、不做任何扣减**（见 §7.4.1） |
+| `known` 集合断言失败 | `\|known\|` 不符或 hand∩bottom ≠ ∅ | 视为识别错误，走低置信流程 |
 | 窗口移动/缩放 | 运行时校验窗口矩形 | 按比例重算 ROI；尺寸不符则提示重新标定 |
 | 窗口最小化/失焦 | win32 窗口状态查询 | 进入**挂起模式**（5 Hz），悬浮窗显示"已暂停" |
 | dxcam 初始化失败 | 启动自检 | 降级 mss，**进入降级模式**（见下） |
@@ -360,7 +476,29 @@ $$\text{unseen} = \text{full\_deck} - \text{自己手牌} - \text{已打出} - \
 | 显示器切换 | 窗口所在 output 变化 | 按窗口位置重选 `output_idx` |
 | 未验证变体（如 6 人 3 副） | 查 §7.1 规则表 | 拒绝启动并提示先完成标定实测 |
 
-### 9.1 mss 降级模式
+### 9.1 低置信度暂停的语义（本稿补充，防止静默丢牌）
+
+初稿只写"暂停自动流程"，但未定义暂停期间采集与状态机是否继续，存在**静默丢牌**风险：
+§4.5 的环形缓冲只保留约 3 秒，而人工纠正往往超过 3 秒。
+
+**修正后的语义**：
+
+| 组件 | 暂停期间行为 |
+|---|---|
+| 采集线程 | **继续运行**（60 Hz 不变） |
+| N 个区状态机 | **继续运行**，继续产出 `PlayEvent` |
+| 墩边界检测 / `trick_index` | **继续运行**（否则墩序会错） |
+| 引擎的**自动提交** | **门控**：不直接写入 `GameState` |
+| 事件去向 | 进入**按 `frame_ts` 排序的待确认队列** `GameState.pending` |
+
+- **证据帧在入队时立即落盘**，不依赖只有 3 秒的环形缓冲
+- 用户纠正完成后，**按 `frame_ts` 顺序重放**待确认队列
+- 每个未纠正事件都是 `pending` 中的**显式条目**，绝不静默丢弃
+- 看门狗产生的 `missed_play` 与低置信产生的 `pending` **共用同一队列**，
+  仅 `reason` 字段不同（`low_confidence` / `missed_play`）
+- UI 以待确认条数显示角标，提示用户按 §14.1 热键进入交互模式
+
+### 9.2 mss 降级模式
 
 mss 单帧 17.7 ms（56 FPS）**约等于一个完整核心**，与 dxcam 的 0.25% 不在同一量级。
 因此降级时**不维持 60 Hz**：
@@ -380,7 +518,31 @@ mss 单帧 17.7 ms（56 FPS）**约等于一个完整核心**，与 dxcam 的 0.
 | L3 | 事件层 | 录制帧序列**离线回放**，断言 `PlayEvent` 序列（含 `seat`/`trick_index`）与墩边界正确 |
 | L4 | 端到端 | 录一段真实牌局 → 回放 → 断言最终记牌结果与人工核对一致 |
 
-**功能 B 的专项验收**：构造已知牌局，断言 `ground_truth ⊆ per_seat_candidates[seat]` 对每家成立。
+### 10.1 功能 B 的专项验收（防止平凡满足）
+
+仅断言 `ground_truth ⊆ candidates` 不够——返回整个 `unseen` 池给每一家即可恒真。
+因此必须**四条断言同时成立**：
+
+| # | 断言 | 防的是什么 |
+|---|---|---|
+| B1 | `ground_truth[seat] ⊆ candidates[seat]`（每家） | soundness |
+| B2 | `certain[seat] ⊆ ground_truth[seat]`（每家） | certain 的 soundness |
+| B3 | **排除性**：构造场景中可证必然在别家的牌，**不得**出现在 `candidates[seat]` | **平凡全集解** |
+| B4 | 构造场景中存在 `certain[seat] ≠ ∅` 的情形 | **恒返回空集解** |
+
+- B3 的构造场景：例如某花色全部剩余牌已被别家明牌持有，则该家的 `candidates`
+  中不得含该花色任何牌
+- B4 的构造场景：例如某家某花色剩余张数已被"其余各家都不可能持有"逼死
+- 另设**紧致度回归**：记录多个构造场景下 `|candidates|` 的基线值，
+  超过基线一定比例即判定为推断退化（防止实现悄悄退化为返回全集）
+
+### 10.2 待确认队列的验收
+
+构造"低置信事件后紧跟正常事件"的帧序列，断言：
+
+1. 所有事件都出现在 `pending` 队列中，**无丢失**
+2. 队列按 `frame_ts` 有序
+3. 重放后最终 `GameState` 与"无低置信介入"的参照序列一致
 
 **可测性前提**：帧序列可录制/回放，因此 L3/L4 不需要真实游戏在跑。
 
@@ -396,7 +558,7 @@ mss 单帧 17.7 ms（56 FPS）**约等于一个完整核心**，与 dxcam 的 0.
 |---|---|---|
 | 出牌区 × **N**（N = 玩家数） | 功能 B/C | 区数由玩家数决定 |
 | 手牌区 | 功能 A/B（自己手牌） | |
-| **底牌/扣底区** | 功能 B/A | **本稿补充**。仅庄家可见且短暂显示，是 §7.4 公式的必要输入 |
+| **底牌/扣底区** | 功能 B/A | **本稿补充**。仅庄家可见且短暂显示，是 §7.4.1 记账的必要输入。<br>**不可见/为空属正常**，不做扣减、不报警 |
 | 分数区 | 功能 C | |
 | 主牌指示区 | 主牌判定 | 含亮主/反主结果 |
 
@@ -455,7 +617,8 @@ mss 单帧 17.7 ms（56 FPS）**约等于一个完整核心**，与 dxcam 的 0.
 | **Phase 0** | 采样录制工具 + 标定工具 | ① 能自动切出带时间戳的牌面样本切片，攒齐 13 类点数 + 4 类花色模板<br>② **实测补齐 `(6,3)` 变体规则表**（手牌数、底牌张数），将 `source` 从 `UNVERIFIED` 改为 `measured` |
 | **Phase 1** | 采集层 + 识别层 + 事件层 | 离线回放：`PlayEvent` 序列（含 `seat`/`trick_index`）与墩边界判定正确 |
 | **Phase 2** | 牌局引擎（A）+ 悬浮窗 | 实时对局中剩余牌统计正确 |
-| **Phase 3** | 按家记牌（B）+ 分数墩次（C） | B：`ground_truth ⊆ per_seat_candidates[seat]` 对每家成立<br>C：墩赢家与分牌归属正确 |
+| **Phase 3a** | 墩赢家规则引擎 + 分数墩次（C） | 墩赢家与分牌归属正确（跟牌/对子/拖拉机/甩牌用例齐全） |
+| **Phase 3b** | 按家记牌推断（B） | §10.1 的 B1–B4 四条断言全部通过 + 紧致度回归不退化 |
 | **Phase 4**（可选） | CNN 识别器 / OCR 交叉校验 | 识别准确率显著优于模板匹配 |
 
 **每个阶段的验收都基于 §10 的离线回放**，因此不需要真实对局即可验证。
