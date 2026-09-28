@@ -47,15 +47,22 @@ def split_patches(corner: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def extract_card_patches(frame: np.ndarray,
-                         model: LayoutModel) -> dict[str, list[CardPatch]]:
+                         model: LayoutModel,
+                         occupancy: dict[str, dict] | None = None,
+                         ) -> dict[str, list[CardPatch]]:
     """提取画面中各出牌区的角标切片。
 
     返回 {区名: [CardPatch, ...]}，只含有牌的区。
     画面边缘导致切片不完整的牌会被丢弃（宁可少认，不可认错）。
+
+    `occupancy` 可传入已算好的 `detect_occupied_zones` 结果，
+    避免调用方（如事件流水线）重复做一次全图斑点检测。
     """
     h, w = frame.shape[:2]
+    if occupancy is None:
+        occupancy = detect_occupied_zones(frame, model)
     out: dict[str, list[CardPatch]] = {}
-    for zone, info in detect_occupied_zones(frame, model).items():
+    for zone, info in occupancy.items():
         blob = info["blob"]
         count = int(info["count"])
         patches: list[CardPatch] = []

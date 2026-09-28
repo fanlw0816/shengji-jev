@@ -13,17 +13,17 @@
 |---|---|---|---|
 | Plan 1 | 采集 · 锚定 · 标定基础 | ✅ | 82 项测试，含 4 张真实截图端到端验收 |
 | Plan 2 | 识别层（点数 13 + 花色 4 + 投票 + 置信度） | 🟡 | 框架 35 项测试通过；真实模板库待标注 |
+| Plan 3 | 事件层（状态机 / 去重 / 墩边界 / 待确认队列） | ✅ | 54 项测试，含真实截图离线回放 |
 | Plan 4a | 牌局引擎：主牌次序 + 墩赢家 | 🟡 | 51 项测试通过；甩牌判定未实现 |
 | Plan 4b | 牌局引擎：记账模型 | ✅ | 25 项测试通过；三类重复扣减缺陷均有回归测试 |
-| Plan 3 | 事件层 | ⬜ | — |
 | Plan 5 | 悬浮窗 UI（PySide6） | ⬜ | — |
 | Plan 6 | 按家推断（功能 B） | ⬜ | — |
 
-**当前测试：210 项全部通过。**
+**当前测试：264 项全部通过。**
 
 ```bash
 uv sync
-uv run pytest                       # 210 passed
+uv run pytest                       # 264 passed
 ```
 
 ---
@@ -130,16 +130,29 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 
 ---
 
-## Plan 3 — 事件层 ⬜
+## Plan 3 — 事件层 ✅
 
-- [ ] `events/` 出牌区状态机（`EMPTY` / `ENTERING` / `SETTLED`）
-- [ ] 判稳（连续 8 帧差异 < 阈值）
-- [ ] pHash 去重（杜绝同墩重复计数）
-- [ ] 环形缓冲（常驻最近 3 秒 ROI 灰度帧）
-- [ ] 墩边界检测（全部 N 区同帧清空）
-- [ ] 看门狗 `missed_play`
-- [ ] 待确认队列（按 `frame_ts` 有序，证据帧入队即落盘）
-- [ ] 离线回放：断言 `PlayEvent` 序列与墩边界正确
+- [x] `events/types.py` `ZoneState` / `FrameSnapshot` / `PlayEvent` / `TrickEndEvent` / `PendingItem`
+- [x] `events/pipeline.py` `ZoneTracker` 区域状态机（`EMPTY` / `ENTERING` / `SETTLED`）
+- [x] 判稳：连续 8 帧差异 < 阈值；**首帧永不算稳定**（否则动画中间态会被当摆定）
+- [x] `events/phash.py` dHash 去重，**清空时重置周期**（否则下一墩同样的牌会被漏计）
+- [x] `events/ringbuffer.py` 环形缓冲 + 时间窗回溯，供低置信时重算
+- [x] 墩边界：全部 N 区回到 `EMPTY` 且此前有过占用
+- [x] 看门狗：一次占用周期内出现第二种内容 → `missed_play`
+- [x] `events/pending.py` 待确认队列：按 `frame_ts` 有序、**入队即落盘证据**、缺图仍入队
+- [x] 低置信两个阈值独立、合取式触发（`confidence` / `frame_agreement`）
+- [x] 未确认的出牌**不进入本墩确定记录**，但事件本身必须流出
+- [x] 离线回放：用 4 张真实截图断言事件序列与墩边界
+
+详见 [事件层文档](docs/superpowers/plans/2026-09-28-events.md)。
+
+**三道防线**（都对应设计文档 §9.1「绝不静默丢牌」）：
+
+| 防线 | 防的是什么 |
+|---|---|
+| pHash 去重 | 同一手牌被反复计入 |
+| 看门狗 `missed_play` | 一手牌被下一手覆盖、来不及读取 |
+| 待确认队列 | 低置信事件因纠正耗时超过缓冲时长而消失 |
 
 ---
 
@@ -207,6 +220,7 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | [设计文档](docs/superpowers/specs/2026-09-28-shengji-cardcounter-design.md) | 完整设计（940 行） |
 | [Plan 1 计划 + 实施结果](docs/superpowers/plans/2026-09-28-capture-and-layout.md) | 采集/锚定/标定 |
 | [Plan 2 识别层](docs/superpowers/plans/2026-09-28-recognition.md) | 识别层 + 模板标注流程 |
+| [Plan 3 事件层](docs/superpowers/plans/2026-09-28-events.md) | 状态机 / 去重 / 看门狗 / 待确认队列 |
 | [调研笔记](docs/research/2026-09-28-prior-art-and-risks.md) | 同类工具、开源先例、未核实项 |
 | [文档索引](docs/README.md) | 全部文档与 spike 实测脚本对照表 |
 
@@ -222,3 +236,4 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | 2026-09-28 | Plan 2 识别层框架，134 项测试 |
 | 2026-09-28 | Plan 4a 引擎核心，185 项测试 |
 | 2026-09-28 | Plan 4b 记账模型，210 项测试；关联远程仓库 |
+| 2026-09-28 | Plan 3 事件层（状态机/去重/看门狗/待确认队列），264 项测试 |
