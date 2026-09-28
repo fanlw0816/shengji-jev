@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.python-version
+
+# uv
+# (uv.lock 应当提交，见下)
+
+# 采样与调试产物
+samples/
+spike/_bench_*.png
+spike/_probe_*.png
+*.log
+
+# 配置（含本机 ROI 标定，不入库）
+config.local.json
+
+# 编辑器
+.vscode/
+.idea/

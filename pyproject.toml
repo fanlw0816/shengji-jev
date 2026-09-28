@@ -1,0 +1,18 @@
+[project]
+name = "shengji"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "dxcam>=0.3.0",
+    "mss>=10.2.0",
+    "numpy>=2.5.3",
+    "opencv-python>=5.0.0.93",
+    "pyside6>=6.11.2",
+    "pywin32>=312",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-qt>=4.5.0",
+]
