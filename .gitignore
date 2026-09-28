@@ -11,6 +11,7 @@ __pycache__/
 samples/
 spike/_bench_*.png
 spike/_probe_*.png
+spike/shot_analysis/
 *.log
 
 # 配置（含本机 ROI 标定，不入库）
