@@ -16,6 +16,11 @@
 注意 `A₀ ∪ P = H ∪ D`，两种写法的集合**完全相同**，但不能交叉取。
 本模型采用**扣底后 (H, D)**，因为这两个区域在出牌阶段持续可见、可反复校验。
 
+> **实施中修正（2026-09-29）**：初版用「按面值断言 H 与 D 不重叠」来拦混用，
+> 这在两副牌下会**对合法牌型误报**（同面值有 2 张，庄家手上 1 张 ♠A、
+> 底牌埋另 1 张 ♠A 很正常）。现改为按**牌堆构成**判定，
+> 混用则由运行时不变式 I1 捕获。理由与代价详见 `KnownSet.for_declarer`。
+
 ### 缺陷二：`played` 与 `known` 重叠
 
 用户自己打出的牌本就在 `known` 里，若用 `全牌 − known − played` 会扣两次，
@@ -106,11 +111,25 @@ class KnownSet:
                      rule: VariantRule) -> "KnownSet":
         """庄家视角：采用**扣底后**组合 (H, D)。
 
-        断言：|H| == hand_size、|D| == bottom_size、H ∩ D == ∅、
-        |H ∪ D| == hand_size + bottom_size。
+        断言：|H| == hand_size、|D| == bottom_size、
+        每个面值 |H ∪ D| 的张数 ≤ 牌堆构成、|H ∪ D| == hand_size + bottom_size。
 
         ⚠️ 传进来的必须是**扣底后**的手牌与**扣底后**的底牌。
-        传扣底前的底牌（P）会与 H 重叠，断言会拦下。
+
+        ### 为什么不再断言 `H ∩ D == ∅`（实施中修正）
+
+        初版按面值断言手牌与底牌不重叠。**在两副牌下这是错的**：
+        同一面值有 2 张，庄家手上 1 张 ♠A、底牌埋另 1 张 ♠A 完全是合法牌型
+        （实测发牌即会命中，`for_declarer` 会对合法输入抛异常）。
+
+        真正该拦的是「同一面值的张数超过牌堆构成」——那才是识别重复
+        （同一张牌被认了两次）或快照混用的信号，所以断言改为按**牌堆构成**判。
+
+        代价要说清楚：快照混用（扣底后的 H + 扣底前的 P）**在构造时不再总能拦下**
+        （若重叠面值恰好都是 2 张一副，则各面值计数仍然合法）。
+        这类错误改由运行时捕获：被重复计入已知的那几张，别人一打出就会触发
+        `UnseenPool` 的「未见池中已无此牌」（不变式 I1）。
+        见 `test_mixed_snapshots_surface_at_play_time`。
         """
         hand = Counter(post_burial_hand)
         bot = Counter(buried)
@@ -120,16 +139,20 @@ class KnownSet:
         if sum(bot.values()) != rule.bottom_size:
             raise AccountingError(
                 f"底牌应为 {rule.bottom_size} 张，实际 {sum(bot.values())} 张")
-        overlap = hand & bot
-        if overlap:
+        merged = hand + bot
+        deck = deck_composition(rule.decks)
+        over = {f: n for f, n in merged.items() if n > deck.get(f, 0)}
+        if over:
+            detail = "、".join(f"{f.label()} {n} 张（牌堆只有 {deck.get(f, 0)} 张）"
+                              for f, n in over.items())
             raise AccountingError(
-                f"手牌与底牌不得重叠，却有 {dict(overlap)}。"
-                f"常见原因：把扣底前的手牌与扣底前的底牌混用，"
-                f"或把扣底后的手牌与扣底前的底牌混用")
-        total = sum(hand.values()) + sum(bot.values())
+                f"手牌与底牌合计超出牌堆构成：{detail}。"
+                f"常见原因：同一张牌被识别了两次，"
+                f"或把扣底前的手牌与扣底前的底牌混用")
+        total = sum(merged.values())
         if total != rule.hand_size + rule.bottom_size:
             raise AccountingError(f"已知牌总数应为 {rule.hand_size + rule.bottom_size}，实际 {total}")
-        return cls(cards=hand + bot, role="declarer",
+        return cls(cards=merged, role="declarer",
                    hand_size=rule.hand_size, bottom_size=rule.bottom_size)
 
     @classmethod

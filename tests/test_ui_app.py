@@ -238,17 +238,18 @@ def test_pool_invariant_breakage_is_surfaced_not_swallowed():
 
     构造：手牌 25 张（含 (14,0) 但不含 (14,1)），
     却报出一手「自己打出了不在已知集合里的牌」—— 这是识别错认的典型症状。
+    这里把 top 区显式映射到自己（席位方位标定错的极端情形），
+    使事件走「自己出牌」的校验分支。
     """
     from shengji.cards import Card
 
     hand = [Card(rank=r, suit=s) for r in range(2, 15) for s in range(2)][:25]
     assert Card(rank=14, suit=1) not in hand
 
-    app = _app([])
+    app = _app([], zone_to_seat={"bottom": 0, "top": 0, "left": 0, "right": 0})
     app.init_pool(hand)
     assert app.pool is not None
 
-    # zone="top" 未配置 zone_to_seat，会落到 own_seat，从而走「自己出牌」的校验分支
     ev = PlayEvent(zone="top", cards=(Card(rank=14, suit=1),), count=1,
                    confidence=1.0, frame_agreement=1.0,
                    trick_index=0, frame_ts=1.0)
@@ -256,6 +257,115 @@ def test_pool_invariant_breakage_is_surfaced_not_swallowed():
 
     assert "记账异常" in app.session.last_message
     assert "已知集合之外" in app.session.last_message
+
+
+def test_default_zone_to_seat_follows_measured_layout():
+    """默认区→座位映射取自设计文档 §11.2 实测布局，不是随手写的。
+
+    没有这个默认值，实时运行时四个区会全部落到"自己"头上，记账直接算错。
+    """
+    app = _app([])
+    assert app.pipeline.zone_to_seat == {"bottom": 0, "right": 1, "top": 2, "left": 3}
+    assert app.session.last_message == ""
+
+
+def test_explicit_zone_to_seat_overrides_default():
+    app = _app([], zone_to_seat={"bottom": 3, "right": 2, "top": 1, "left": 0})
+    assert app.pipeline.zone_to_seat == {"bottom": 3, "right": 2, "top": 1, "left": 0}
+
+
+# ---------- 功能 B：空门追踪与按家推断 ----------
+
+def _plays(*specs, trick: int = 0):
+    from shengji.cards import Card
+
+    return tuple(
+        PlayEvent(zone=zone, cards=(Card(rank=rank, suit=suit),), count=1,
+                  confidence=1.0, frame_agreement=1.0,
+                  trick_index=trick, frame_ts=ts)
+        for zone, rank, suit, ts in specs)
+
+
+def _app_with_pool(hand=None, **kw) -> CounterApp:
+    from shengji.cards import Card
+
+    app = _app([], **kw)
+    hand = hand or [Card(rank=r, suit=s) for r in range(2, 15) for s in range(2)][:25]
+    app.init_pool(hand)
+    app.session.trump = parse_trump("S2")
+    return app
+
+
+def test_trick_end_feeds_void_tracker():
+    """墩结束时把本墩出牌回放给空门追踪器：跟不出领出花色的某家被记为空门。"""
+    from shengji.cards import Card
+
+    app = _app_with_pool()
+    # 领出方 = 上家（left，座位 3）出 ♥5；对家（top，座位 2）跟 ♦6 → 对家对红桃空门
+    plays = _plays(("left", 5, 1, 1.0), ("top", 6, 2, 1.1),
+                   ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3))
+    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays))
+
+    assert app.voids.is_void(2, 1), "对家的红桃空门没有被记录"
+    assert not app.voids.is_void(3, 1)
+
+
+def test_ambiguous_lead_order_skips_void_deduction():
+    """最早两手同帧落定 → 谁是领出方无法判定 → 宁可不推。"""
+    app = _app_with_pool()
+    plays = _plays(("left", 5, 1, 1.0), ("top", 6, 2, 1.0),
+                   ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3))
+    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays))
+    assert app.voids.deductions == 0
+
+
+def test_unrecognised_play_skips_void_deduction():
+    """有一手没认出来 → 整墩不推空门（缺一手会把跟牌关系推歪）。"""
+    app = _app_with_pool()
+    plays = list(_plays(("left", 5, 1, 1.0), ("top", 6, 2, 1.1),
+                        ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3)))
+    plays[1] = PlayEvent(zone="top", cards=None, count=1, confidence=0.0,
+                         frame_agreement=0.0, trick_index=0, frame_ts=1.1)
+    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=tuple(plays)))
+    assert app.voids.deductions == 0
+
+
+def test_void_exclusion_shows_up_in_inference():
+    """空门一旦成立，该家的推断范围里就不该再出现那一整组牌。"""
+    from shengji.cards import Card
+
+    app = _app_with_pool()
+    plays = _plays(("left", 5, 1, 1.0), ("top", 6, 2, 1.1),
+                   ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3))
+    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays))
+    app.refresh()                      # refresh 里重算推断（overlay 为 None 时直接返回）
+
+    inf = app.inference
+    assert inf is not None
+    leaked = [c for c in inf.candidates[2] if c.suit == 1 and not c.joker
+              and c.rank != 2]          # 排除主牌：♥2 属主牌组，不在红桃组内
+    assert not leaked, f"对家已对红桃空门，却仍有 {leaked}"
+    assert Card(rank=5, suit=1) not in inf.candidates[2]
+
+
+def test_own_hand_remaining_tracks_own_plays():
+    from shengji.cards import Card
+
+    hand = [Card(rank=r, suit=s) for r in range(2, 15) for s in range(2)][:25]
+    app = _app_with_pool(hand=hand)
+    assert app.own_hand_remaining() == hand
+
+    ev = PlayEvent(zone="bottom", cards=(hand[0],), count=1, confidence=1.0,
+                   frame_agreement=1.0, trick_index=0, frame_ts=1.0)
+    app._update_pool(ev)
+    assert len(app.own_hand_remaining()) == 24
+    assert hand[0] not in app.own_hand_remaining()
+
+
+def test_inference_is_absent_without_pool_or_trump():
+    app = _app([])                     # 没有手牌、也没有主牌
+    app.refresh()
+    assert app.inference is None
 
 
 # ---------- 生命周期 ----------

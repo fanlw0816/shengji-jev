@@ -3,7 +3,7 @@
 > **本文件是项目的进度看板，每完成一项就更新它。**
 > 状态标记：✅ 已完成并验证 ｜ 🟡 部分完成 ｜ ⬜ 未开始 ｜ ⛔ 被阻塞
 >
-> 最后更新：2026-09-28
+> 最后更新：2026-09-29
 
 ---
 
@@ -15,15 +15,22 @@
 | Plan 2 | 识别层（点数 13 + 花色 4 + 投票 + 置信度） | 🟡 | 框架 35 项测试通过；真实模板库待标注 |
 | Plan 3 | 事件层（状态机 / 去重 / 墩边界 / 待确认队列） | ✅ | 54 项测试，含真实截图离线回放 |
 | Plan 4a | 牌局引擎：主牌次序 + 墩赢家 | 🟡 | 51 项测试通过；甩牌判定未实现 |
-| Plan 4b | 牌局引擎：记账模型 | ✅ | 25 项测试通过；三类重复扣减缺陷均有回归测试 |
-| Plan 5 | 悬浮窗 UI（PySide6） | 🟡 | 显示/热键/穿透已完成；**交互式纠正面板未做** |
-| Plan 6 | 按家推断（功能 B） | ⬜ | — |
+| Plan 4b | 牌局引擎：记账模型 | ✅ | 27 项测试通过；三类重复扣减缺陷均有回归测试 |
+| Plan 5 | 悬浮窗 UI（PySide6） | 🟡 | 显示/热键/穿透/推断行/异常行已完成；**交互式纠正面板未做** |
+| Plan 6 | 按家推断（功能 B） | ✅ | 引擎 31 项测试（B1–B4 + 紧致度基线）+ UI 接线断言，全部实际执行通过 |
 
-**当前测试：364 项全部通过。**
+**当前测试：412 项全部通过**（`uv run pytest`，本机原生跑满）。
+
+> 📌 **依赖说明（本机是 KVM 虚拟机，CPU 被伪造成 Core 2 Duo T7700）**：
+> numpy 自 **2.4.0** 起把官方 wheel 的编译基线抬到 **x86-64-v2**（需 SSE4.2 + POPCNT），
+> 本机不满足 → 装 2.4+ 会 `import numpy` 直接 `RuntimeError`。
+> 故 `pyproject.toml` 锁 **`numpy>=2,<2.4`**（现解出 2.3.5），opencv 5.0 只要求 `numpy>=2`，兼容。
+> 环境变量（`NPY_DISABLE_CPU_FEATURES` 等）**绕不过**——基线校验编译期写死在扩展里。
+> 迁到较新 CPU 的机器后可放宽回 `numpy>=2`。
 
 ```bash
 uv sync
-uv run pytest                       # 364 passed
+uv run pytest                       # 412 passed
 ```
 
 ---
@@ -124,9 +131,16 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 
 | 缺陷 | 后果 | 回归测试 |
 |---|---|---|
-| 快照时点混用（扣底后的 H + 扣底前的 P 有交集） | 重复扣减，未见池算错 | `test_declarer_known_set_rejects_overlap` |
+| 快照时点混用（扣底后的 H + 扣底前的 P 有交集） | 重复扣减，未见池算错 | `test_mixed_snapshots_surface_at_play_time` |
 | `played ∩ known`（自己打出的牌已在 known 中） | 未见池变负数 | `test_own_play_does_not_decrement_unseen` |
 | 底牌不属于任何一家 | 计数约束把底牌派给某家 | `test_bottom_unknown_is_reserved_so_invariants_hold` |
+
+**实施中修正的断言缺陷（2026-09-29，Plan 6 实施时发现）**：
+`KnownSet.for_declarer` 初版按**面值**断言手牌与底牌互斥（`H ∩ D == ∅`），
+但两副牌同面值有 2 张 —— 庄家手上 1 张 ♠A、底牌埋另 1 张 ♠A 是合法牌型，
+**合法输入会被拒**。现改为按牌堆构成判；快照混用改由运行时不变式 I1 捕获
+（`test_declarer_known_set_allows_same_face_in_hand_and_bottom`、
+`test_declarer_known_set_rejects_face_exceeding_deck`）。
 
 ---
 
@@ -169,9 +183,12 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 - [x] `tools/run_counter.py` CLI 入口
 - [x] 降级模式提示（mss → 15Hz、无后端 → error）
 - [x] 待确认计数显示（低置信 / 漏抓分开计）
+- [x] **`session.last_message` 显示行**：此前"记账异常 / 热键注册失败 / 强制重读"
+      写了却没有任何地方渲染 —— 本次接上（失败要可见）
+- [x] 区→座位映射默认值（取自设计文档 §11.2 实测布局，可被标定覆盖）
+- [x] 各家推断范围行（Plan 6 的 UI 侧，见下）
 - [ ] **交互式纠正面板**：目前只显示"有 N 项待确认"，
       还不能在悬浮窗里点选改正某一张牌
-- [ ] 各家推断范围面板（属 Plan 6 的功能 B，UI 侧未做）
 
 详见 [UI 层文档](docs/superpowers/plans/2026-09-28-ui.md)。
 
@@ -185,11 +202,13 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 
 ---
 
-## Plan 6 — 按家推断（功能 B）⬜
+## Plan 6 — 按家推断（功能 B）✅
 
-- [ ] `per_seat_candidates`（最紧可靠超集）
-- [ ] `per_seat_certain`（必然持有）
-- [ ] 验收断言 B1–B4（防平凡满足）：
+- [x] `engine/inference.py` `infer_per_seat()` → `per_seat_candidates` + `per_seat_certain`
+- [x] `engine/inference.py` `VoidTracker`：从出牌历史推空门（跟牌规则），
+      甩牌领出 / 无出牌记录时**保守不推**
+- [x] 三类约束的上下界传播求解器（面值总数 / 堆容量 / 空门），迭代到不动点
+- [x] 验收断言 B1–B4（防平凡满足）：
 
 | # | 断言 | 防的是什么 |
 |---|---|---|
@@ -198,7 +217,25 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | B3 | 可证必然在别家的牌不得出现在本家 candidates | **平凡全集解** |
 | B4 | 构造场景中存在 `certain[seat] ≠ ∅` | **恒返回空集解** |
 
-- [ ] 紧致度回归（防止实现悄悄退化为返回全集）
+- [x] 紧致度回归：基线值固定（构造场景 112 / 对局中局 113，无信息 114）
+      + 「信息越多越紧」单调性断言
+- [x] 矛盾检测：面值无处可去 / 堆填不满 / 上下界互斥 → 抛 `InferenceError`
+      （继承 `AccountingError`，复用既有异常通道），并在悬浮窗显示
+- [x] UI 接线：墩结束回放空门、`OverlayView.inference_text`、悬浮窗推断行
+
+B3/B4 用**手写牌型**而非随机发牌（随机发牌只能碰运气凑出空门）：
+自己 25 张红桃、下家与对家全无红桃 → 两家对红桃组空门（B3），
+剩下的 ♥A 只可能在上家手里（B4）。
+
+### ⚠️ 未验证项
+
+- ~~**UI 接线本机未能运行验证**~~ **已解决**：把 numpy 上限锁到 `<2.4` 后本机已能原生
+  跑全量 412 项，`test_ui_app` / `test_ui_viewmodel` / `test_ui_overlay` 的新增断言
+  均已实际执行通过（此前用冒烟脚本确认的关键路径结论一致）
+- **空门推导的前提未实测**：依赖客户端强制「有该花色必须跟，有多少跟多少」。
+  若证伪会**破坏 soundness**（不只是变宽），已列入 Phase 0 标定
+
+详见 [Plan 6 文档](docs/superpowers/plans/2026-09-29-per-seat-inference.md)。
 
 ---
 
@@ -214,6 +251,10 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 - [ ] 甩牌最大张数实测（决定出牌区检索宽度上限）
 - [ ] 「看底牌」期间手牌区是否变形（若临时并入手牌，标定 ROI 会误读）
 - [ ] 「全部 N 区同帧清空」假设验证（若为淡出/逐区清空，`trick_index` 会被污染）
+- [ ] **跟牌规则验证**（Plan 6 新增）：有该花色是否强制跟、有多少是否必须跟多少
+      —— 空门推导与按家推断的 soundness 直接押在这条上
+- [ ] **区→座位映射与出牌方向**（Plan 6 新增）：默认值取自 §11.2 实测布局，
+      需在真实客户端确认（含出牌方向 cw/ccw）
 
 ---
 
@@ -226,6 +267,8 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | 手牌区识别可行性 | 25 张紧贴重叠，每张仅露约 13px，角标能否容纳未验证 |
 | 三副牌规则数据 | `(6,3)` 标注 `UNVERIFIED`，引擎拒绝启动 |
 | 副级三门比较规则 | 待实测（§7.6.3） |
+| 空门推导前提 | 依赖「有该花色必须跟」；证伪会破坏 soundness（Phase 0 待验） |
+| ~~本机无法运行 numpy 测试~~ | ~~CPU 特性被屏蔽导致 numpy 2.x 拒绝加载~~ → **已解决**：numpy `>=2,<2.4`（2.3.5），本机跑满 412 项。详见上方依赖说明 |
 
 ---
 
@@ -239,6 +282,7 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | [Plan 2 识别层](docs/superpowers/plans/2026-09-28-recognition.md) | 识别层 + 模板标注流程 |
 | [Plan 3 事件层](docs/superpowers/plans/2026-09-28-events.md) | 状态机 / 去重 / 看门狗 / 待确认队列 |
 | [Plan 5 UI 层](docs/superpowers/plans/2026-09-28-ui.md) | 悬浮窗 / 热键 / 鼠标穿透 |
+| [Plan 6 按家推断](docs/superpowers/plans/2026-09-29-per-seat-inference.md) | 功能 B 引擎 + UI 接线 + 验证环境说明 |
 | [调研笔记](docs/research/2026-09-28-prior-art-and-risks.md) | 同类工具、开源先例、未核实项 |
 | [文档索引](docs/README.md) | 全部文档与 spike 实测脚本对照表 |
 
@@ -256,3 +300,7 @@ uv run python -m shengji.tools.label_templates build --work templates_work --out
 | 2026-09-28 | Plan 4b 记账模型，210 项测试；关联远程仓库 |
 | 2026-09-28 | Plan 3 事件层（状态机/去重/看门狗/待确认队列），264 项测试 |
 | 2026-09-28 | Plan 5 UI 层（会话状态/视图模型/悬浮窗/全局热键/CLI），364 项测试 |
+| 2026-09-29 | Plan 6 按家推断：上下界传播求解器 + 空门追踪 + B1–B4 验收，31 项新测试 |
+| 2026-09-29 | 修正 3 个实施中发现的缺陷：`for_declarer` 面值断言误报、`zone_to_seat` 缺省导致区全归自己、异常消息无处显示 |
+| 2026-09-29 | 推断接进 UI（墩结束回放空门 → 推断行），412 项测试 |
+| 2026-09-29 | **修复 numpy 装不上的问题**：定位为 numpy≥2.4 的 x86-64-v2 编译基线在本机虚拟机（伪装的 Core 2 Duo T7700）上不满足 → 锁 `numpy>=2,<2.4`，全量 412 项本机原生通过 |

@@ -108,6 +108,15 @@ class OverlayWindow(QWidget):
         self.pending_label = QLabel("", self.panel)
         self.pending_label.setVisible(False)
         v.addWidget(self.pending_label)
+        self.inference_label = QLabel("", self.panel)
+        self.inference_label.setWordWrap(True)
+        self.inference_label.setVisible(False)
+        v.addWidget(self.inference_label)
+
+        self.message_label = QLabel("", self.panel)
+        self.message_label.setWordWrap(True)
+        self.message_label.setVisible(False)
+        v.addWidget(self.message_label)
 
         self.footer_label = QLabel("", self.panel)
         self.footer_label.setObjectName("footer")
@@ -157,6 +166,12 @@ class OverlayWindow(QWidget):
         if view.pending_text:
             self.pending_label.setStyleSheet(
                 f"color: {LEVEL_COLORS['warn']}; font-weight: bold;")
+        self.inference_label.setText(view.inference_text)
+        self.inference_label.setVisible(bool(view.inference_text))
+        self.message_label.setText(view.message_text)
+        self.message_label.setVisible(bool(view.message_text))
+        if view.message_text:
+            self.message_label.setStyleSheet(f"color: {LEVEL_COLORS['warn']};")
         self.footer_label.setText(view.footer)
         self.adjustSize()
 

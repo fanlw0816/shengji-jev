@@ -20,3 +20,6 @@ config.local.json
 # 编辑器
 .vscode/
 .idea/
+
+# 助手工作区（记忆与本地笔记，不入库）
+.workbuddy/

@@ -21,10 +21,17 @@
 | Plan 3 | 事件层（状态机 / 去重 / 墩边界 / 待确认队列） | ✅ **已实现并验证** |
 | Plan 4a | 牌局引擎：主牌次序（含级牌）+ 墩赢家（单张/对子/拖拉机） | 🟡 **核心已实现并验证**；甩牌判定待补 |
 | Plan 4b | 牌局引擎：记账模型（已知集合 / 未见牌池 / 未知底牌堆） | ✅ **已实现并验证** |
-| Plan 5 | 悬浮窗 UI（PySide6） | 🟡 **显示/热键/穿透已完成**；交互式纠正面板未做 |
-| Plan 6 | 按家推断（功能 B） | ⬜ |
+| Plan 5 | 悬浮窗 UI（PySide6） | 🟡 **显示/热键/穿透/推断行/异常行已完成**；交互式纠正面板未做 |
+| Plan 6 | 按家推断（功能 B） | ✅ **已实现并验证**（引擎 31 项 + UI 接线断言全部执行通过） |
 
-**当前测试：364 项全部通过**（`uv run pytest`）。
+**当前测试：412 项**（`uv run pytest`）。
+
+> 📌 **关于 numpy 版本上限**：numpy 自 **2.4.0** 起把官方 wheel 的编译基线抬到
+> **x86-64-v2**（要求 SSE4.2 + POPCNT）。若在 KVM/VMware 等虚拟机里跑、且 hypervisor
+> 暴露的是老 CPU 型号（如本机的 Core 2 Duo T7700），装 2.4+ 会 `import numpy` 直接
+> `RuntimeError: ...baseline optimizations: (X86_V2) but your machine doesn't support`，
+> 连带 `cv2` / `PySide6` 全部起不来。因此本项目锁 **`numpy>=2,<2.4`**（现为 2.3.5），
+> opencv 5.0 只要求 `numpy>=2`，兼容。迁到较新 CPU 的机器后可放宽回 `numpy>=2`。
 
 ---
 
@@ -34,7 +41,7 @@
 
 ```bash
 uv sync                 # 建虚拟环境并安装依赖（含可编辑安装本项目）
-uv run pytest -q        # 跑测试（364 项，含 4 张真实截图的端到端验收）
+uv run pytest -q        # 跑测试（412 项，含 4 张真实截图的端到端验收）
 ```
 
 ### 运行记牌器
@@ -101,7 +108,11 @@ DXGI 抓屏 ──> 牌面块检测 ──> 就近归属到四区 ──> 状态
                                                  ▼
                               PlayEvent(seat, cards, confidence)
                                                  ▼
-                                    牌局引擎 apply() -> GameState
+                          牌局引擎：记账（未见池计数 / 不变式 I1·I2）
+                                                 ▼
+                       墩结束时回放出牌 → 各家的「空门」（哪个花色已经打光）
+                                                 ▼
+                    按家推断：可能持有（candidates）/ 必然持有（certain）
                                                  ▼
                                          悬浮窗刷新
 ```
@@ -135,6 +146,19 @@ dxcam 底层是 Desktop Duplication API，屏幕无变化时 `grab()` **返回 `
 
 改用**牌尺寸块**（56×79、宽高比 0.709、面积 3700+ 的白色块）作为强特征，
 判据为「**区内块数必须多于区外块数**」。
+
+### 按家推断的关键取舍
+
+读牌不是算概率，而是**排除**。三类约束参与求解：面值总数、各家容量、**空门**
+（某家已打光某花色 —— 最强的一类信息，来自"有该花色必须跟"）。
+
+- **只做逻辑排除，不做概率推断**：给范围不给概率（概率没有客观验收标准）
+- **偏宽安全、偏窄危险**：少建模一点只会让范围偏宽，而偏宽仍不漏真值；
+  所以不追求"最优解"，只保证"可靠且不平凡"
+- **不平凡**：靠"把整池给每一家"蒙混是能被测出来的 ——
+  验收要求同时满足「排除性」（可证在别家的牌不得出现）与「必然性」（被逼死的牌要认出来）
+- **矛盾即报错**：面值无处可去、某家填不满、上下界互斥 —— 都是识别错误的强信号，
+  直接抛错并在悬浮窗显示，绝不返回一个"看起来能用"的结果
 
 ---
 
@@ -172,15 +196,21 @@ dxcam 底层是 Desktop Duplication API，屏幕无变化时 `grab()` **返回 `
 ```
 src/shengji/
   constants.py      实测常量单一来源（每条数值都注明实测出处）
+  cards.py          牌张模型（A=14、花色 0-3、王独立字段）
   imaging.py        中文路径安全 IO、颜色分割、牌尺寸块扫描、牌宽度量
   geometry.py       Rect 与「中心 + 臂长」四区推导
   layout/           model(锚点模式) · validate(几何+牌面块校验) · detect(占用检测/锚定选择)
   capture/          Protocol 抽象 + dxcam 主路径 + mss 降级 + 自动降级工厂
   window/win32.py   客户区定位 + Per-Monitor DPI 感知
+  recognition/      patch(角标切片) · templates(字形模板库) · classify(投票+置信度)
+  events/           phash(去重) · ringbuffer(回溯) · pending(待确认队列) · pipeline(状态机)
+  engine/           trump(主牌次序) · trick(墩赢家) · accounting(记账) · inference(按家推断)
+  session.py        会话状态（与 Qt 无关，纯单测覆盖）
+  ui/               viewmodel(纯函数) · overlay(悬浮窗) · hotkeys · app(控制器)
   calib/store.py    标定 JSON 读写
-  tools/            dump_layout(布局标注) · record(采样录制)
+  tools/            dump_layout(布局标注) · record(采样录制) · label_templates · run_counter
 
-tests/              82 项测试
+tests/              412 项测试
   fixtures/screenshots/   4 张真实截图（端到端验收的数据源）
 spike/              实测脚本与性能证据（非产品代码）
 docs/               设计文档 · 实现计划 · 调研笔记
@@ -208,7 +238,11 @@ docs/               设计文档 · 实现计划 · 调研笔记
 |---|---|
 | [设计文档](docs/superpowers/specs/2026-09-28-shengji-cardcounter-design.md) | 完整设计：架构、采样、牌局引擎、记账模型、校验、风险 |
 | [Plan 1 实现计划](docs/superpowers/plans/2026-09-28-capture-and-layout.md) | 采集/锚定/标定的逐任务实现计划 |
+| [Plan 3 事件层](docs/superpowers/plans/2026-09-28-events.md) | 状态机 / 去重 / 看门狗 / 待确认队列 |
+| [Plan 5 UI 层](docs/superpowers/plans/2026-09-28-ui.md) | 悬浮窗 / 热键 / 鼠标穿透 |
+| [Plan 6 按家推断](docs/superpowers/plans/2026-09-29-per-seat-inference.md) | 功能 B：上下界传播、空门推导、B1–B4 验收 |
 | [调研笔记](docs/research/2026-09-28-prior-art-and-risks.md) | 同类工具、开源先例、规则依据、未核实项 |
+| [文档索引](docs/README.md) | 全部文档与 spike 实测脚本对照表 |
 
 ---
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 
 import numpy as np
 from PySide6.QtCore import QObject, QTimer
@@ -14,6 +15,8 @@ from PySide6.QtCore import QObject, QTimer
 from ..capture.factory import DegradedMode, build_backend, degraded_poll_interval
 from ..cards import Card
 from ..engine.accounting import UnseenPool, get_variant_rule
+from ..engine.inference import InferenceError, SeatInference, VoidTracker, infer_per_seat
+from ..engine.trick import PlayedCards
 from ..engine.trump import TrumpInfo
 from ..events.pending import PendingQueue
 from ..events.pipeline import EventPipeline
@@ -28,6 +31,16 @@ from .viewmodel import build_view
 
 DEFAULT_RING_SECONDS = 3.0
 DEFAULT_FPS = 60.0
+
+# 区 → 座位映射的默认值，取自设计文档 §11.2 的**实测布局**
+# （bottom=自己 / right=下家 / top=对家 / left=上家），与 SessionState.seats 顺序一致。
+#
+# ⚠️ 这是**可覆盖的默认值，不是隐式约定**：客户端座位方位或出牌方向不同时必须由
+# 标定结果覆盖（设计文档 §7.5）。非 4 人局不使用它 —— 映射为空时宁可把出牌归错，
+# 也要在状态栏明说"未标定"，而不是悄悄算错。
+DEFAULT_ZONE_TO_SEAT: dict[str, int] = {
+    "bottom": 0, "right": 1, "top": 2, "left": 3,
+}
 
 
 class CounterApp(QObject):
@@ -67,19 +80,34 @@ class CounterApp(QObject):
         self.pending = pending if pending is not None else PendingQueue()
         self.library = library
 
+        if zone_to_seat is not None:
+            mapping = dict(zone_to_seat)
+        elif players == len(DEFAULT_ZONE_TO_SEAT):
+            mapping = dict(DEFAULT_ZONE_TO_SEAT)
+        else:
+            mapping = {}
+
         self.pipeline = EventPipeline(
             self.model,
             library=library,
             pending=self.pending,
             ring=self.ring,
-            zone_to_seat=zone_to_seat,
+            zone_to_seat=mapping,
         )
         self.session = SessionState(trump=trump)
         self.session.degraded_mode = backend_mode.value
+        if not mapping:
+            # 归属未标定就必须说出来：出牌会被记到错误的人头上
+            self.session.last_message = "未标定区→座位映射，出牌归属不可靠"
 
         self.rule = get_variant_rule(players, decks)
         self.own_seat = own_seat
         self._pool: UnseenPool | None = None
+        # 功能 B：空门追踪器（信息来自墩结束时回放的出牌）+ 最近一次推断结果
+        self.voids = VoidTracker(players)
+        self._inference: SeatInference | None = None
+        self._own_hand: list[Card] | None = None
+        self._own_played: Counter[Card] = Counter()
 
         self.overlay = overlay
         self.hotkeys = HotkeyManager() if use_hotkeys else None
@@ -93,15 +121,30 @@ class CounterApp(QObject):
     def pool(self) -> UnseenPool | None:
         return self._pool
 
+    @property
+    def inference(self) -> SeatInference | None:
+        """最近一次按家推断结果（无手牌 / 无主牌 / 约束矛盾时为 None）。"""
+        return self._inference
+
     def init_pool(self, known_seat_cards: list[Card] | None = None) -> None:
         """建立未见牌池。未提供自己手牌时按「整副牌都还没出现」显示。"""
         from ..engine.accounting import KnownSet
 
         if known_seat_cards is None:
             self._pool = None
+            self._own_hand = None
             return
         known = KnownSet.for_defender(known_seat_cards, self.rule)
         self._pool = UnseenPool(self.rule, known, own_seat=self.own_seat)
+        # 自己手牌是**已知**的，留着给按家推断用（推断只推别人，自己那家报确切的）
+        self._own_hand = list(known_seat_cards)
+        self._own_played = Counter()
+
+    def own_hand_remaining(self) -> list[Card] | None:
+        """自己手上还剩哪些牌（已知手牌 − 已打出的）。未标定手牌时返回 None。"""
+        if self._own_hand is None:
+            return None
+        return list((Counter(self._own_hand) - self._own_played).elements())
 
     # ---------- 帧循环 ----------
 
@@ -139,12 +182,68 @@ class CounterApp(QObject):
                 self._pool.on_play(seat, list(event.cards))
             except Exception as exc:  # 不变式被破坏 -> 记下来，不静默继续
                 self.session.last_message = f"记账异常：{exc}"
+            if seat == self.own_seat:
+                self._own_played.update(event.cards)
+        elif isinstance(event, TrickEndEvent):
+            self._track_voids(event)
+
+    # ---------- 功能 B：按家推断 ----------
+
+    def _track_voids(self, event: TrickEndEvent) -> None:
+        """墩结束时把本墩出牌喂给空门追踪器（设计文档 §7.4.2 的信息来源）。
+
+        **领出方判定用 `frame_ts` 最早的那一手** —— 这是现有信号里最好的近似
+        （区是"摆定后"才出事件的，摆定时刻即该手牌出现时刻的近似）。
+        若最早两手同帧落定，则谁领出无法判定，此时宁可不推（保守放弃）。
+
+        有任一手未识别（`cards is None`）、或某个区的座位归属未标定时也放弃 ——
+        缺一手、错归属都会把跟牌关系推歪，而**推歪空门会破坏 soundness**，
+        不只是变宽而已。
+        """
+        if self.session.trump is None or len(event.plays) < 2:
+            return
+        entries: list[tuple[float, int, tuple[Card, ...]]] = []
+        for p in event.plays:
+            if p.cards is None:
+                return
+            seat = self.pipeline.zone_to_seat.get(p.zone)
+            if seat is None:
+                return
+            entries.append((p.frame_ts, int(seat), p.cards))
+        entries.sort(key=lambda e: e[0])
+        if entries[0][0] == entries[1][0]:
+            return
+        try:
+            self.voids.on_trick([PlayedCards(seat=s, cards=c) for _, s, c in entries],
+                                self.session.trump)
+        except InferenceError as exc:
+            self.session.last_message = f"空门推断异常：{exc}"
+
+    def _recompute_inference(self) -> None:
+        """重算按家推断范围。矛盾时明确报错并撤下面板，不展示可疑结果。"""
+        if self._pool is None or self.session.trump is None:
+            self._inference = None
+            return
+        try:
+            self._inference = infer_per_seat(
+                self._pool, self.session.trump,
+                voids=self.voids.as_mapping(),
+                own_hand_remaining=self.own_hand_remaining(),
+            )
+        except InferenceError as exc:
+            self._inference = None
+            self.session.last_message = f"推断异常（已停止显示推断）：{exc}"
 
     def refresh(self) -> None:
-        """把当前状态刷到悬浮窗。"""
+        """重算按家推断，并把当前状态刷到悬浮窗。
+
+        推断先算、与 overlay 无关：它同时也是给测试与后续消费者（如纠正面板）用的状态。
+        """
+        self._recompute_inference()
         if self.overlay is None:
             return
-        self.overlay.set_view(build_view(self.session, pool=self._pool))
+        self.overlay.set_view(build_view(self.session, pool=self._pool,
+                                         inference=self._inference))
 
     # ---------- 热键动作 ----------
 

@@ -189,3 +189,50 @@ def test_build_view_after_play_event_shows_updated_trick():
                       trick_index=0, frame_ts=1.0))
     v = build_view(s)
     assert "第 1 墩" in v.trick_text
+
+
+# ---------- 功能 B：推断行与消息行 ----------
+
+def _fake_inference(lines=("上家 ≤12 种", "对家 ≤30 种")):
+    class _Inf:
+        def summary_lines(self, labels=None):
+            return list(lines)
+
+    return _Inf()
+
+
+def test_build_view_without_inference_has_no_line():
+    """推断不可用时不显示推断行 —— 不显示比显示错的强。"""
+    assert build_view(SessionState()).inference_text == ""
+
+
+def test_build_view_renders_inference_lines():
+    v = build_view(SessionState(), inference=_fake_inference())
+    assert "上家 ≤12 种" in v.inference_text
+    assert "对家 ≤30 种" in v.inference_text
+    assert any("上家" in ln for ln in v.to_lines())
+
+
+def test_inference_labels_follow_session_seats():
+    """座位号 → 方位标签取自 session.seats（方位由标定决定，不能写死）。"""
+    seen = {}
+
+    class _Inf:
+        def summary_lines(self, labels=None):
+            seen.update(labels or {})
+            return ["x"]
+
+    build_view(SessionState(seats=["bottom", "left", "top", "right"]), inference=_Inf())
+    assert seen == {0: "自己", 1: "上家", 2: "对家", 3: "下家"}
+
+
+def test_build_view_shows_last_message():
+    """异常消息必须出现在视图里 —— 否则"失败要可见"就是空话。"""
+    s = SessionState(last_message="记账异常：未见池中已无此牌")
+    v = build_view(s)
+    assert "记账异常" in v.message_text
+    assert any("记账异常" in ln for ln in v.to_lines())
+
+
+def test_build_view_has_no_message_line_when_clean():
+    assert build_view(SessionState()).message_text == ""

@@ -153,3 +153,24 @@ def test_set_view_after_events(overlay):
 
 def test_window_opacity_is_set(overlay):
     assert 0.0 < overlay.windowOpacity() <= 1.0
+
+
+def test_set_view_renders_inference_and_message(overlay):
+    """推断行与异常消息都必须真的画出来（隐藏标签等于没做）。"""
+    s = SessionState(last_message="推断异常（已停止显示推断）：无解")
+
+    class _Inf:
+        def summary_lines(self, labels=None):
+            return ["上家 ≤12 种 必持 ♥A"]
+
+    overlay.set_view(build_view(s, inference=_Inf()))
+    assert "上家" in overlay.inference_label.text()
+    assert overlay.inference_label.isVisible() or not overlay.isVisible()
+    assert "推断异常" in overlay.message_label.text()
+
+
+def test_set_view_hides_inference_and_message_when_empty(overlay):
+    overlay.set_view(build_view(SessionState()))
+    assert overlay.inference_label.text() == ""
+    assert not overlay.inference_label.isVisibleTo(overlay)
+    assert not overlay.message_label.isVisibleTo(overlay)

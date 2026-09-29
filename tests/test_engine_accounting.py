@@ -88,17 +88,54 @@ def test_declarer_known_set_rejects_wrong_sizes():
         KnownSet.for_declarer(_cards(25), _cards(7), RULE_4P2D)
 
 
-def test_declarer_known_set_rejects_overlap():
-    """回归：混用扣底前的手牌与扣底前的底牌会重叠，必须被拦下。
+def test_declarer_known_set_allows_same_face_in_hand_and_bottom():
+    """回归（实施中修正）：多副牌下同面值出现在手牌与底牌里是**合法**的。
 
-    这正是设计评审抓出的缺陷一 —— H 与 P 的交集是 P − D（庄家留下的底牌），非空。
+    两副牌有 2 张 ♠A，庄家手上 1 张、底牌埋另 1 张完全正常。
+    初版按面值断言「H ∩ D == ∅」会对这种合法输入误报 —— 真实发牌就会命中。
     """
-    both = _cards(25)
-    hand = both[:20] + _cards(5, start_rank=9, suit=D)
-    buried = both[20:25] + _cards(3, start_rank=5, suit=C)   # 与 hand 重叠 5 张
+    hand = _cards(25)
+    ace = Card(rank=14, suit=S)
+    hand[0] = ace
+    buried = _cards(8, start_rank=2, suit=C)
+    assert ace not in buried
+    buried[0] = ace                      # 另一张 ♠A 埋进底牌
+    k = KnownSet.for_declarer(hand, buried, RULE_4P2D)
+    assert k.cards[ace] == 2             # 已知两张，正是两副牌的全部
+    assert k.size == 33
+
+
+def test_declarer_known_set_rejects_face_exceeding_deck():
+    """同一面值合计超过牌堆构成 —— 这才是该拦的（识别重复或快照混用）。"""
+    hand = _cards(25)
+    ace = Card(rank=14, suit=S)
+    hand[0], hand[1] = ace, ace          # 手上两张 ♠A（已用完全部）
+    buried = _cards(8, start_rank=2, suit=C)
+    buried[0] = ace                      # 底牌又来一张 —— 3 张，牌堆只有 2 张
     with pytest.raises(AccountingError) as ei:
         KnownSet.for_declarer(hand, buried, RULE_4P2D)
-    assert "不得重叠" in str(ei.value)
+    assert "超出牌堆构成" in str(ei.value)
+
+
+def test_mixed_snapshots_surface_at_play_time():
+    """快照混用（扣底后的 H + 扣底前的 P）：构造时可能合法，运行时必被逮到。
+
+    混用会把 P − D 那几张重复计入已知，于是未见池里这几张被错扣成 0；
+    真实存在的那一张一旦被别人打出，就触发不变式 I1。
+    这是「构造期断言」降级为「运行期不变式」后的兜底路径。
+    """
+    hand = _cards(25)                              # 13 ♥ + ♦2..♦13
+    pre_burial = _cards(8, start_rank=9, suit=D)   # ♦9..♦A + ♣2 ♣3
+    ks = KnownSet.for_declarer(hand, pre_burial, RULE_4P2D)   # 不再报错
+    pool = UnseenPool(RULE_4P2D, ks, own_seat=0)
+
+    dup = Card(rank=9, suit=D)
+    assert ks.cards[dup] == 2, "该面值被重复计入已知"
+    assert pool.count(dup) == 0, "未见池被错扣成 0（真实牌局里还剩 1 张）"
+
+    with pytest.raises(AccountingError) as ei:
+        pool.on_play(1, [dup])
+    assert "未见池中已无此牌" in str(ei.value)
 
 
 def test_defender_known_set_is_25_with_bottom_unknown_8():
