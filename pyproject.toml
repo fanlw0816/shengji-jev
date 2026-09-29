@@ -5,7 +5,14 @@ requires-python = ">=3.13"
 dependencies = [
     "dxcam>=0.3.0",
     "mss>=10.2.0",
-    "numpy>=2.5.3",
+    # 上限锁在 2.4 之前：numpy 自 2.4.0 起官方 wheel 把编译基线抬到 x86-64-v2
+    # （要求 SSE4.2 + POPCNT）。本机是 KVM 虚拟机，暴露的 CPU 型号为
+    # Core 2 Duo T7700（实测 SSE4.1/POPCNT/AVX 均不可用），装 2.4+ 会
+    # import 即 RuntimeError: ...baseline optimizations: (X86_V2)...
+    # 实测边界：2.2.6 / 2.3.5 正常；2.4.0（已被 PyPI yank）、2.4.4、2.5.3 全部失败。
+    # numpy 2.3.x 仍以 x86-64 为基线，功能足够（opencv 5.0 只要求 numpy>=2）。
+    # 迁到支持 x86-64-v2 的机器后，可把这里放宽回 "numpy>=2"。
+    "numpy>=2,<2.4",
     "opencv-python>=5.0.0.93",
     "pyside6>=6.11.2",
     "pywin32>=312",
