@@ -40,7 +40,11 @@ from .types import (
     ZoneState,
 )
 
-SETTLE_FRAMES = 8            # 连续稳定帧数（60Hz 下约 133ms）
+# 连续稳定帧数。注意是**按新帧计数**（`app.tick_once` 在 grab() 返回 None 时直接
+# 返回、不喂状态机），所以它对应的**墙钟时延取决于屏幕实际呈现率**：
+#   基准机 46.7 FPS -> 约 171 ms；当前虚拟机 ~17 FPS -> 约 470 ms
+# （原注释写「60Hz 下约 133ms」，两台机器上都对不上；实测见 README「实测数据」）
+SETTLE_FRAMES = 8
 SETTLE_DIFF_THRESHOLD = 2.0  # 灰度平均绝对差阈值
 VOTE_FRAMES = 3              # 参与投票的帧数
 THUMB_W, THUMB_H = 96, 48    # 环形缓冲/哈希用的缩略尺寸

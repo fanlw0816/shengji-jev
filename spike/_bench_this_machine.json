@@ -1,0 +1,42 @@
+{
+  "env": {
+    "screen": "1916x998",
+    "monitors": 1,
+    "python": "3.13.14",
+    "numpy": "2.3.5",
+    "cv2": "5.0.0",
+    "processor": "Intel64 Family 6 Model 15 Stepping 11, GenuineIntel",
+    "machine": "AMD64",
+    "refresh_hz": 64,
+    "cpu_features": {
+      "SSE2": true,
+      "SSE3": true,
+      "SSE4.2": true,
+      "AVX": false,
+      "POPCNT": false
+    }
+  },
+  "mss_full_ms": 60.330791666638106,
+  "dxcam_full_idle_ms": 1.0176660004071891,
+  "dxcam_full_idle_nonnull": 4,
+  "qt_repaint_hz": 123.86809287290373,
+  "mss_region_sample_hz": 16.6246871154032,
+  "mss_content_change_hz": 16.292193373095134,
+  "hot_ms": 0.384849333204329,
+  "hot_cpu_ms": 0.20833333333333334,
+  "hot_changed": 2,
+  "poll167_tries": 62,
+  "poll167_got": 34,
+  "poll167_hit_pct": 54.83870967741935,
+  "poll167_fps": 16.690743062730878,
+  "stream_polls": 174,
+  "stream_changes": 52,
+  "stream_effective_hz": 17.290312155483054,
+  "tmpl_corner_ms": 0.8117623333043108,
+  "tmpl_full_ms": 0.6382321666460484,
+  "tmpl_real_corner_ms": 0.4310124333327015,
+  "card_w_measured": 56,
+  "card_h_measured": 78,
+  "card_aspect_measured": 0.718,
+  "card_stack_w_measured": 72
+}
