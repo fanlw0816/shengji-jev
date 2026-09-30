@@ -8,6 +8,24 @@ from dataclasses import dataclass
 
 user32 = ctypes.windll.user32
 
+# ⚠️ **必须显式声明 argtypes / restype**（2026-09-30 修）。
+#
+# HWND 在 64 位下是指针，实际句柄值经常大于 2^31。不声明时 ctypes 按默认的
+# C `int` 转换实参 → 抛 `OverflowError: int too long to convert`。
+# 而 `find_windows_by_title` 的枚举回调是被 ctypes 调用的，**回调里的异常被吞掉**，
+# 于是那个窗口既不进结果也不报错 —— 表现为「找游戏窗口有时找得到有时找不到」，
+# 取决于句柄数值，重现性极差（设计原则「失败要可见」最忌讳的一类）。
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+user32.IsWindowVisible.restype = wintypes.BOOL
+user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetWindowTextW.restype = ctypes.c_int
+user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.GetClientRect.restype = wintypes.BOOL
+user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+user32.ClientToScreen.restype = wintypes.BOOL
+
 _DPI_AWARE_SET = False
 
 
