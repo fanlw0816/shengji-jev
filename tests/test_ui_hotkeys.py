@@ -19,7 +19,6 @@ from shengji.ui.hotkeys import (
     parse_hotkey,
 )
 
-
 # ---------- 解析 ----------
 
 def test_parse_single_modifier_letter():

@@ -22,7 +22,7 @@ def test_others_one_yields_three_patches(shots):
     m = LayoutModel.from_reference()
     patches = extract_card_patches(shots["others_one"], m)
     assert set(patches) == {"top", "left", "right"}
-    for zone, plist in patches.items():
+    for plist in patches.values():
         assert len(plist) == 1
 
 

@@ -1,0 +1,32 @@
+{
+  "name": "两墩记分，赢家按座位号归属",
+  "description": "第二墩的出牌顺序与座位顺序不同（领出者是对家）。winner_seat 是座位号而非 plays 下标 —— 曾经用下标取值，会把这一墩的分数记到别人头上。",
+  "players": 4,
+  "decks": 2,
+  "trump": "S2",
+  "zone_to_seat": {"bottom": 0, "right": 1, "top": 2, "left": 3},
+  "events": [
+    {"type": "play", "zone": "bottom", "cards": ["H5"], "trick": 0, "ts": 1.0},
+    {"type": "play", "zone": "right", "cards": ["H10"], "trick": 0, "ts": 1.1},
+    {"type": "play", "zone": "top", "cards": ["H3"], "trick": 0, "ts": 1.2},
+    {"type": "play", "zone": "left", "cards": ["H4"], "trick": 0, "ts": 1.3},
+    {"type": "trick_end", "trick": 0, "ts": 1.5, "plays": ["bottom", "right", "top", "left"]},
+
+    {"type": "play", "zone": "top", "cards": ["HA"], "trick": 1, "ts": 2.0},
+    {"type": "play", "zone": "left", "cards": ["HK"], "trick": 1, "ts": 2.1},
+    {"type": "play", "zone": "bottom", "cards": ["HQ"], "trick": 1, "ts": 2.2},
+    {"type": "play", "zone": "right", "cards": ["HJ"], "trick": 1, "ts": 2.3},
+    {"type": "trick_end", "trick": 1, "ts": 2.5, "plays": ["top", "left", "bottom", "right"]}
+  ],
+  "expect": {
+    "trick_index": 2,
+    "history_len": 2,
+    "total_points": 25,
+    "points": {"right": 15, "top": 10},
+    "history": [
+      {"points": 15, "winner_zone": "right", "points_known": true, "confident": true},
+      {"points": 10, "winner_zone": "top", "points_known": true, "confident": true}
+    ],
+    "errors_empty": true
+  }
+}

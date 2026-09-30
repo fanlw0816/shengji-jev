@@ -47,7 +47,7 @@ def test_remaining_rows_reflects_unseen_counter():
     unseen = Counter({Card(rank=5, suit=S): 0,
                       Card(rank=14, suit=S): 1})
     rows = remaining_rows(unseen, decks=2)
-    spades = {label: n for label, n in rows[0].cells}
+    spades = dict(rows[0].cells)
     assert spades["5"] == 0
     assert spades["A"] == 1
     # 未出现在计数器里的面值应显示 0（已被看到）
@@ -108,7 +108,7 @@ def test_status_warn_when_degraded_to_mss():
 
 def test_status_error_when_no_backend():
     s = SessionState(degraded_mode="none")
-    text, level = status_line(s)
+    _text, level = status_line(s)
     assert level == "error"
 
 
@@ -121,7 +121,7 @@ def test_status_warn_when_pending():
 
 def test_paused_takes_priority_over_pending():
     s = SessionState(paused=True, pending_count=3)
-    text, level = status_line(s)
+    text, _level = status_line(s)
     assert "暂停" in text
 
 
@@ -196,7 +196,7 @@ def test_build_view_prefers_pool_over_unseen():
             return Counter({Card(rank=5, suit=S): 0})
 
     v = build_view(SessionState(), unseen=None, pool=_Pool())
-    spades = {label: n for label, n in v.remaining[0].cells}
+    spades = dict(v.remaining[0].cells)
     assert spades["5"] == 0
 
 

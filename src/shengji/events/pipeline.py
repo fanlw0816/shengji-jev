@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -263,17 +262,19 @@ class EventPipeline:
         frames: list[RecognitionResult] = []
         for plist in tr.patches_history:
             reads = [read_patch(p, self.library) for p in plist]
-            zr = ZoneRead(zone=zone, cards=reads)
-            frames.append(RecognitionResult(zones={zone: zr}))
+            frames.append(RecognitionResult(zones={zone: ZoneRead(zone=zone, cards=reads)}))
 
         voted = vote_frames(frames)
-        zr = voted.zones.get(zone)
-        if zr is None or not zr.cards:
+        best = voted.zones.get(zone)
+        if best is None or not best.cards:
             return None, voted.confidence, voted.frame_agreement
-        if any(r.card is None for r in zr.cards):
-            # 有任一槽位未认出 -> 整手不认（宁可让你点一下）
-            return None, voted.confidence, voted.frame_agreement
-        return tuple(r.card for r in zr.cards), voted.confidence, voted.frame_agreement
+        resolved: list[Card] = []
+        for r in best.cards:
+            if r.card is None:
+                # 有任一槽位未认出 -> 整手不认（宁可让你点一下）
+                return None, voted.confidence, voted.frame_agreement
+            resolved.append(r.card)
+        return tuple(resolved), voted.confidence, voted.frame_agreement
 
     def _evidence(self, frame: np.ndarray, zone: str) -> np.ndarray | None:
         rect = self.model.zones.get(zone)

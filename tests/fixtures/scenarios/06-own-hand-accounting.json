@@ -1,0 +1,21 @@
+{
+  "name": "自己出牌：手牌剩余减少，但未见池不动",
+  "description": "自己打出的牌本就在 known 里。若也从未见池扣减就是**重复扣减**，unseen 会变负数。这里同时盯住两个量：own_hand_remaining 少一张，unseen_total 不变（108 − 25 张已知 = 83）。",
+  "players": 4,
+  "decks": 2,
+  "trump": "S2",
+  "own_seat": 0,
+  "own_hand": ["SA", "SA", "SK", "SK", "SQ", "SQ", "SJ", "SJ", "S10", "S10",
+               "S9", "S9", "S8", "S8", "S7", "S7", "S6", "S6", "S5", "S5",
+               "S4", "S4", "S3", "S3", "HA"],
+  "zone_to_seat": {"bottom": 0, "right": 1, "top": 2, "left": 3},
+  "events": [
+    {"type": "play", "zone": "bottom", "cards": ["SA"], "trick": 0, "ts": 1.0}
+  ],
+  "expect": {
+    "unseen_total": 83,
+    "unseen": {"SA": 0, "SK": 0, "HA": 1, "joker_big": 2},
+    "own_hand_remaining": {"SA": 1, "SK": 2, "HA": 1},
+    "errors_empty": true
+  }
+}

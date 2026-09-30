@@ -6,7 +6,6 @@
 
 import cv2
 import numpy as np
-import pytest
 
 from shengji import constants as C
 from shengji.recognition.templates import (

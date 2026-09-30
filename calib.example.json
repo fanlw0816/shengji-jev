@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "output_idx": 0,
+  "variant": [
+    4,
+    2
+  ],
+  "layout": {
+    "reference_size": [
+      1280,
+      720
+    ],
+    "center": [
+      556.375,
+      325.5
+    ],
+    "arm_x": 107.75,
+    "arm_y_top": 79.0,
+    "arm_y_bottom": 85.0,
+    "zone_w": 73,
+    "zone_h": 79,
+    "anchor_mode": "top_left"
+  }
+}

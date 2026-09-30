@@ -33,12 +33,12 @@ class Rect:
     def as_tuple(self) -> tuple[int, int, int, int]:
         return (self.x0, self.y0, self.x1, self.y1)
 
-    def clip(self, bx0: int, by0: int, bx1: int, by1: int) -> "Rect":
+    def clip(self, bx0: int, by0: int, bx1: int, by1: int) -> Rect:
         """裁到给定边界内。"""
         return Rect(max(self.x0, bx0), max(self.y0, by0),
                     min(self.x1, bx1), min(self.y1, by1))
 
-    def expand(self, dx: int, dy: int, bounds: tuple[int, int] | None = None) -> "Rect":
+    def expand(self, dx: int, dy: int, bounds: tuple[int, int] | None = None) -> Rect:
         """四周外扩。bounds=(W, H) 时同时裁到画面内。"""
         r = Rect(self.x0 - dx, self.y0 - dy, self.x1 + dx, self.y1 + dy)
         if bounds is not None:
@@ -70,7 +70,7 @@ def layout_from_center(
     out: dict[str, Rect] = {}
     for name, (dx, dy) in arms.items():
         zx, zy = cx + dx, cy + dy
-        x0 = int(round(zx - zone_w / 2))
-        y0 = int(round(zy - zone_h / 2))
+        x0 = round(zx - zone_w / 2)
+        y0 = round(zy - zone_h / 2)
         out[name] = Rect(x0, y0, x0 + zone_w, y0 + zone_h)
     return out

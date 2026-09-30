@@ -4,6 +4,7 @@ from shengji.cards import RANK_ACE, RANK_KING, Card
 from shengji.engine.trick import (
     PlayedCards,
     Structure,
+    structure_matches,
     structure_of,
     trick_points,
     unplayed_of_suit,
@@ -70,6 +71,28 @@ def test_structure_joker_pair_is_not_tractor():
 def test_structure_empty_raises():
     with pytest.raises(ValueError):
         structure_of(())
+
+
+# ---------- 结构匹配（供墩赢家与 legal.py 共用）----------
+
+def test_structure_matches_same_structure():
+    assert structure_matches((_c(5),), Structure.SINGLE)
+    assert structure_matches((_c(5), _c(5)), Structure.PAIR)
+    tractor = (_c(5), _c(5), _c(6), _c(6))
+    assert structure_matches(tractor, Structure.TRACTOR)
+
+
+def test_structure_matches_rejects_other_structure():
+    assert not structure_matches((_c(5), _c(6)), Structure.PAIR)
+    assert not structure_matches((_c(5), _c(5)), Structure.TRACTOR)
+    assert not structure_matches((_c(5), _c(5)), Structure.SINGLE)
+
+
+def test_structure_matches_mixed_lead_accepts_any_nonempty():
+    """甩牌的「型」由张数决定 —— 各家按张数跟，不按结构跟。"""
+    assert structure_matches((_c(5), _c(6)), Structure.MIXED)
+    assert structure_matches((_c(5), _c(5)), Structure.MIXED)
+    assert not structure_matches((), Structure.MIXED)
 
 
 # ---------- 单张赢家 ----------

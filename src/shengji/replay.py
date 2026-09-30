@@ -25,8 +25,8 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Mapping, Sequence
 
 from .cards import Card
 from .engine.accounting import AccountingError, KnownSet, UnseenPool, VariantRule
@@ -57,7 +57,7 @@ class ReplayContext:
     degraded_mode: str = "dxcam"
     paused: bool = False
 
-    def with_own_hand(self, hand: Sequence[Card] | None) -> "ReplayContext":
+    def with_own_hand(self, hand: Sequence[Card] | None) -> ReplayContext:
         return replace(self, own_hand=None if hand is None else tuple(hand))
 
 
@@ -222,6 +222,6 @@ def make_corrected_play(*, zone: str, cards: Sequence[Card],
 def merge_trick_play(existing: Sequence[PlayEvent],
                      play: PlayEvent) -> tuple[PlayEvent, ...]:
     """把补录的一手并入本墩的出牌序列，按 `frame_ts` 保持有序。"""
-    merged = list(existing) + [play]
+    merged = [*existing, play]
     merged.sort(key=lambda p: p.frame_ts)
     return tuple(merged)

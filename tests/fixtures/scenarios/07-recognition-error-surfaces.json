@@ -1,0 +1,20 @@
+{
+  "name": "识别错认必须冒出错误消息（不变式 I1）",
+  "description": "手牌里已有两张 ♠A，即未见池中 ♠A 为 0。此时下家却打出 ♠A —— 只可能是识别重复或错认。不变式 I1 被破坏，必须报错并在悬浮窗显示，绝不静默继续算。",
+  "players": 4,
+  "decks": 2,
+  "trump": "S2",
+  "own_seat": 0,
+  "own_hand": ["SA", "SA", "SK", "SK", "SQ", "SQ", "SJ", "SJ", "S10", "S10",
+               "S9", "S9", "S8", "S8", "S7", "S7", "S6", "S6", "S5", "S5",
+               "S4", "S4", "S3", "S3", "HA"],
+  "zone_to_seat": {"bottom": 0, "right": 1, "top": 2, "left": 3},
+  "events": [
+    {"type": "play", "zone": "right", "cards": ["SA"], "trick": 0, "ts": 1.0}
+  ],
+  "expect": {
+    "unseen": {"SA": 0},
+    "own_hand_remaining": {"SA": 2},
+    "errors": ["记账异常", "未见池中已无此牌"]
+  }
+}

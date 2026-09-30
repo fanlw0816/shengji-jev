@@ -374,6 +374,8 @@ class OverlayWindow(QWidget):
     def _render_remaining(self, view: OverlayView) -> None:
         while self.remaining_grid.count():
             item = self.remaining_grid.takeAt(0)
+            if item is None:
+                break
             w = item.widget()
             if w is not None:
                 w.deleteLater()

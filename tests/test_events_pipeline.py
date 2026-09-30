@@ -6,12 +6,8 @@
 """
 
 import numpy as np
-import pytest
 
-from shengji import constants as C
-from shengji.cards import Card
 from shengji.events.pending import PendingQueue
-from shengji.events.phash import dhash
 from shengji.events.pipeline import (
     SETTLE_FRAMES,
     EventPipeline,
@@ -27,7 +23,6 @@ from shengji.events.types import (
 )
 from shengji.layout.model import LayoutModel
 from shengji.recognition.templates import TemplateLibrary
-
 from tests.test_templates import _rank_glyph, _suit_glyph
 
 

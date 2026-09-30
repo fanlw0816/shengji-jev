@@ -8,7 +8,10 @@ from shengji.events.types import PendingItem, PlayEvent
 
 
 def _play(zone: str = "top", ts: float = 1.0, trick: int = 0,
-          cards=(Card(rank=5, suit=0),), confidence: float = 0.9) -> PlayEvent:
+          cards: tuple[Card, ...] | None = None,
+          confidence: float = 0.9) -> PlayEvent:
+    if cards is None:
+        cards = (Card(rank=5, suit=0),)
     return PlayEvent(zone=zone, cards=tuple(cards), count=len(cards),
                      confidence=confidence, frame_agreement=1.0,
                      trick_index=trick, frame_ts=ts)

@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
-from ..cards import RANK_LABELS, SUIT_LABELS, SUIT_LETTERS, Card
+from ..cards import RANK_LABELS, SUIT_LABELS, Card
 from ..engine.accounting import UnseenPool, deck_composition
 from ..engine.inference import SeatInference
 from ..session import SessionState

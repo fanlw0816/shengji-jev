@@ -98,9 +98,14 @@ class SessionState:
             rec.points_known = False
             return
 
-        order = [s for s in self.seats]
-        played = [PlayedCards(seat=order.index(p.zone) if p.zone in order else 0,
-                              cards=tuple(p.cards)) for p in rec.plays]
+        order = list(self.seats)
+        played: list[PlayedCards] = []
+        for p in rec.plays:
+            # 上面已挡掉未识别的一手；这里显式收窄，防止 `cards: tuple | None` 漏进来
+            assert p.cards is not None
+            played.append(PlayedCards(
+                seat=order.index(p.zone) if p.zone in order else 0,
+                cards=tuple(p.cards)))
         try:
             outcome = winning_seat(played, self.trump)
         except ValueError:
@@ -115,7 +120,7 @@ class SessionState:
         # 出牌顺序与座位顺序不一致时（先出的不一定是座位靠前的），
         # 用下标索引会把这一墩的赢家记到**别人**头上 —— 分数直接记错人。
         idx = outcome.winner_seat
-        for play, pc in zip(rec.plays, played):
+        for play, pc in zip(rec.plays, played, strict=True):
             if pc.seat == idx:
                 rec.winner_zone = play.zone
                 self.points[rec.winner_zone] = (

@@ -23,7 +23,6 @@ from .trump import (
     GROUP_TRUMP,
     TrumpInfo,
     _top_of,
-    card_strength,
     group_of,
 )
 
@@ -63,6 +62,23 @@ def structure_of(cards: tuple[Card, ...]) -> Structure:
     if n % 2 == 0 and _is_tractor(cards):
         return Structure.TRACTOR
     return Structure.MIXED
+
+
+def structure_matches(cards: tuple[Card, ...], lead_structure: Structure) -> bool:
+    """跟牌的结构是否足以赢过该领出结构（设计文档 §7.3）。
+
+    抽成独立函数是为了让**合法着法枚举（`engine/legal.py`）与墩赢家共用同一份判定** ——
+    各写一遍迟早会出现「枚举说合法、算赢家说不匹配」这类最难查的不一致。
+
+    - `SINGLE` / `PAIR` / `TRACTOR`：要求结构枚举完全相等
+    - `MIXED`（甩牌 / 杂牌）：甩牌的「型」由**张数**决定，各家按张数跟、不按结构跟，
+      故只要求非空。甩牌本身的合法性依赖别家手牌，不在此判定（见 `engine/legal.py`）。
+    """
+    if not cards:
+        return False
+    if lead_structure is Structure.MIXED:
+        return True
+    return structure_of(cards) is lead_structure
 
 
 def _same_face(a: Card, b: Card) -> bool:
@@ -122,16 +138,16 @@ def winning_seat(plays: list[PlayedCards], trump: TrumpInfo) -> TrickOutcome:
         )
 
     best_seat: int | None = None
-    best_key: tuple[int, int] | None = None
+    best_key: tuple[int, ...] | None = None
     for p in plays:
-        if structure_of(p.cards) is not lead_struct:
+        if not structure_matches(p.cards, lead_struct):
             continue
         if not _can_beat_lead(p, lead_group, trump):
             continue
         top = _top_of(p.cards, trump)
         is_trump_play = group_of(p.cards[0], trump) == GROUP_TRUMP
         # 主牌整体压过副牌；同组内比牌力
-        key = (1 if is_trump_play else 0, 0) + top
+        key = (1 if is_trump_play else 0, 0, *top)
         if best_key is None or key > best_key:
             best_key, best_seat = key, p.seat
 

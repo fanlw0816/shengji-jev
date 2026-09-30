@@ -26,7 +26,7 @@ import numpy as np
 from .. import constants as C
 from ..imaging import imread_unicode, imwrite_unicode
 from ..recognition.patch import split_patches
-from ..recognition.templates import TemplateLibrary, glyph_feature, ink_mask
+from ..recognition.templates import TemplateLibrary, glyph_feature
 
 RANK_CHOICES = ["2", "3", "4", "5", "6", "7", "8", "9", "10",
                 "J", "Q", "K", "A", "joker_small", "joker_big"]
@@ -55,7 +55,7 @@ def _rank_and_suit_patches_from_crop(crop: np.ndarray) -> tuple[np.ndarray, np.n
     if n <= 1:
         return np.zeros((1, 1, 3), np.uint8), np.zeros((1, 1, 3), np.uint8)
     big = max(range(1, n), key=lambda i: stats[i][4])
-    x, y, w, h, _ = stats[big]
+    x, y, _w, _h, _ = stats[big]
     corner = crop[y:y + C.CORNER_H, x:x + C.CARD_SLIVER_W]
     if corner.shape[:2] != (C.CORNER_H, C.CARD_SLIVER_W):
         return np.zeros((1, 1, 3), np.uint8), np.zeros((1, 1, 3), np.uint8)

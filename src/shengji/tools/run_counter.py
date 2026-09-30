@@ -13,12 +13,39 @@ import argparse
 import sys
 from pathlib import Path
 
+from ..calib.store import load_calibration
 from ..engine.trump import parse_trump
 from ..events.pending import PendingQueue
 from ..layout.model import LayoutModel
 from ..recognition.templates import TemplateLibrary
 from ..ui.app import CounterApp
 from ..window.win32 import enable_per_monitor_dpi_awareness, find_game_window
+
+
+def _resolve_layout(args, win):
+    """解析出实际使用的布局与变体参数。
+
+    优先级：命令行显式给的值 > 标定文件 > 兜底默认。
+    **找不到标定时不装作有标定** —— 明确提示退回的是 spec §11.2 的参考布局。
+    """
+    cal = load_calibration(args.calib)
+    if cal is not None:
+        players = args.players if args.players is not None else cal.variant[0]
+        decks = args.decks if args.decks is not None else cal.variant[1]
+        output_idx = args.output_idx if args.output_idx is not None else cal.output_idx
+        model = cal.layout
+        print(f"已载入标定 {args.calib}：{players} 人 {decks} 副，显示器 {output_idx}")
+    else:
+        players = args.players if args.players is not None else 4
+        decks = args.decks if args.decks is not None else 2
+        output_idx = args.output_idx if args.output_idx is not None else 0
+        model = LayoutModel.from_reference()
+        print(f"未找到可用标定 {args.calib}，退回参考布局（同 calib.example.json）。"
+              f"完成现场标定后把结果写到 {args.calib}。", file=sys.stderr)
+
+    if win is not None:
+        model = model.for_client(win.x, win.y, win.w, win.h)
+    return model, output_idx, players, decks
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,9 +55,15 @@ def main(argv: list[str] | None = None) -> int:
                          "不给则分牌无法判定，只显示张数。")
     ap.add_argument("--templates", default="templates.json",
                     help="模板库路径（不存在则只报告张数，不认牌）")
-    ap.add_argument("--output-idx", type=int, default=0, help="显示器序号")
-    ap.add_argument("--players", type=int, default=4)
-    ap.add_argument("--decks", type=int, default=2)
+    ap.add_argument("--calib", default="calib.json",
+                    help="标定文件路径。不存在时退回 spec §11.2 的参考布局"
+                         "（等价于仓库里的 calib.example.json），并明确提示。")
+    ap.add_argument("--output-idx", type=int, default=None,
+                    help="显示器序号（不给则用标定里的值，再不然用 0）")
+    ap.add_argument("--players", type=int, default=None,
+                    help="人数（不给则用标定里的变体，默认 4）")
+    ap.add_argument("--decks", type=int, default=None,
+                    help="副数（不给则用标定里的变体，默认 2）")
     ap.add_argument("--pending-dir", default="pending",
                     help="待确认项与证据帧的输出目录")
     ap.add_argument("--no-hotkeys", action="store_true",
@@ -69,18 +102,16 @@ def main(argv: list[str] | None = None) -> int:
               "find_windows_by_title as f; [print(r.title, r.size) for r in f('')]\"",
               file=sys.stderr)
 
-    model = LayoutModel.from_reference()
-    if win is not None:
-        model = model.for_client(win.x, win.y, win.w, win.h)
+    model, output_idx, players, decks = _resolve_layout(args, win)
 
     app = CounterApp(
         model,
         library=library,
         pending=PendingQueue(args.pending_dir),
-        output_idx=args.output_idx,
+        output_idx=output_idx,
         trump=trump,
-        players=args.players,
-        decks=args.decks,
+        players=players,
+        decks=decks,
         use_hotkeys=not args.no_hotkeys,
     )
     if win is not None:
@@ -93,7 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     app.start()
     from PySide6.QtWidgets import QApplication
 
-    return int(QApplication.instance().exec())
+    inst = QApplication.instance()
+    assert inst is not None, "ensure_app 已保证 QApplication 存在"
+    return int(inst.exec())
 
 
 if __name__ == "__main__":

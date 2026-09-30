@@ -55,8 +55,8 @@ soundness，所以本模块宁可宽一点也不猜紧。
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Sequence
 
 from ..cards import Card
 from .accounting import AccountingError, UnseenPool
@@ -276,7 +276,8 @@ def infer_per_seat(pool: UnseenPool,
     }
 
     iterations = 0
-    for iterations in range(1, max_iterations + 1):
+    for _ in range(1, max_iterations + 1):
+        iterations += 1
         changed = False
 
         # ---- ① 面值级强制分配：c 张 f 必须落在能持有它的堆里 ----

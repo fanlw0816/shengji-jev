@@ -38,7 +38,7 @@ class LayoutModel:
     anchor_mode: AnchorMode = AnchorMode.TOP_LEFT
 
     @classmethod
-    def from_reference(cls) -> "LayoutModel":
+    def from_reference(cls) -> LayoutModel:
         """由 spec §11.2 的实测值构造参考布局。"""
         z = C.REF_ZONE_CENTERS
         cx = sum(p[0] for p in z.values()) / 4.0
@@ -53,10 +53,10 @@ class LayoutModel:
             zone_h=C.ZONE_H,
         )
 
-    def with_anchor(self, mode: AnchorMode) -> "LayoutModel":
+    def with_anchor(self, mode: AnchorMode) -> LayoutModel:
         return replace(self, anchor_mode=mode)
 
-    def with_center(self, cx: float, cy: float) -> "LayoutModel":
+    def with_center(self, cx: float, cy: float) -> LayoutModel:
         return replace(self, center=(cx, cy))
 
     @property
@@ -72,7 +72,7 @@ class LayoutModel:
             return ((cl_w - rw) / 2.0, (cl_h - rh) / 2.0)
         return (0.0, 0.0)
 
-    def for_client(self, cl_x: int, cl_y: int, cl_w: int, cl_h: int) -> "LayoutModel":
+    def for_client(self, cl_x: int, cl_y: int, cl_w: int, cl_h: int) -> LayoutModel:
         """把布局换算到给定客户区（客户区在屏幕上的位置为 cl_x, cl_y）。
 
         返回的模型其 center 已是屏幕绝对坐标。
@@ -94,7 +94,7 @@ class LayoutModel:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "LayoutModel":
+    def from_dict(cls, d: dict) -> LayoutModel:
         return cls(
             reference_size=tuple(d["reference_size"]),
             center=tuple(d["center"]),

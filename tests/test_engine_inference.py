@@ -37,14 +37,13 @@ from shengji.engine.accounting import (
     deck_composition,
 )
 from shengji.engine.inference import (
-    BOTTOM_PILE,
     InferenceError,
     SeatInference,
     VoidTracker,
     infer_per_seat,
 )
 from shengji.engine.trick import PlayedCards
-from shengji.engine.trump import GROUP_TRUMP, parse_trump, group_of
+from shengji.engine.trump import GROUP_TRUMP, group_of, parse_trump
 
 S, H, D, C = 0, 1, 2, 3
 RULE = VARIANT_RULES[(4, 2)]
@@ -534,7 +533,7 @@ def test_own_hand_size_mismatch_is_rejected():
 
 def test_own_hand_outside_known_set_is_rejected():
     sc = Scene(seed=11, role="defender")
-    bogus = list(sc.hands[0])[:24] + [Card(rank=14, suit=S)]
+    bogus = [*list(sc.hands[0])[:24], Card(rank=14, suit=S)]
     with pytest.raises(InferenceError) as ei:
         infer_per_seat(sc.pool, sc.trump, own_hand_remaining=bogus)
     assert "已知集合" in str(ei.value)

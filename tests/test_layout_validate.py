@@ -8,7 +8,6 @@ from shengji.layout.validate import (
     validate_geometry,
 )
 
-
 # ---------- 几何校验：与画面无关，任何时候都能跑 ----------
 
 def test_reference_layout_passes_geometry():

@@ -1,0 +1,34 @@
+{
+  "name": "补录后按事件日志重算该墩（设计文档 §10.2 断言 3）",
+  "description": "事件序列与 02 完全相同，只多一个墩级补录：把下家那一手补成 ♥10。补录必须落进 trick_overrides —— 否则会被 TrickEndEvent.plays 覆盖掉，那一墩永远算不出分。",
+  "players": 4,
+  "decks": 2,
+  "trump": "S2",
+  "zone_to_seat": {"bottom": 0, "right": 1, "top": 2, "left": 3},
+  "events": [
+    {"type": "play", "zone": "bottom", "cards": ["H5"], "trick": 0, "ts": 1.0},
+    {"type": "play", "zone": "right", "cards": null, "count": 1, "trick": 0, "ts": 1.1},
+    {"type": "play", "zone": "top", "cards": ["H3"], "trick": 0, "ts": 1.2},
+    {"type": "play", "zone": "left", "cards": ["H4"], "trick": 0, "ts": 1.3},
+    {"type": "trick_end", "trick": 0, "ts": 1.5, "plays": ["bottom", "right", "top", "left"]}
+  ],
+  "overrides": {
+    "0": [
+      {"zone": "bottom", "cards": ["H5"], "trick": 0, "ts": 1.0},
+      {"zone": "right", "cards": ["H10"], "trick": 0, "ts": 1.1},
+      {"zone": "top", "cards": ["H3"], "trick": 0, "ts": 1.2},
+      {"zone": "left", "cards": ["H4"], "trick": 0, "ts": 1.3}
+    ]
+  },
+  "expect": {
+    "trick_index": 1,
+    "history_len": 1,
+    "unscored_tricks": 0,
+    "total_points": 15,
+    "points": {"right": 15},
+    "history": [
+      {"points": 15, "winner_zone": "right", "points_known": true, "confident": true}
+    ],
+    "errors_empty": true
+  }
+}

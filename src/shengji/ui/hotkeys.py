@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
+from typing import Any
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -119,7 +120,7 @@ class HotkeyManager:
     def __init__(self, bindings: dict[str, Hotkey] | None = None) -> None:
         self.bindings = dict(parse_bindings() if bindings is None else bindings)
         self._registered: dict[int, str] = {}
-        self._user32 = None
+        self._user32: Any = None
         self.failures: list[str] = []
 
     def _u(self):

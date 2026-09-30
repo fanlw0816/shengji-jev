@@ -108,7 +108,7 @@ class KnownSet:
 
     @classmethod
     def for_declarer(cls, post_burial_hand: list[Card], buried: list[Card],
-                     rule: VariantRule) -> "KnownSet":
+                     rule: VariantRule) -> KnownSet:
         """庄家视角：采用**扣底后**组合 (H, D)。
 
         断言：|H| == hand_size、|D| == bottom_size、
@@ -156,7 +156,7 @@ class KnownSet:
                    hand_size=rule.hand_size, bottom_size=rule.bottom_size)
 
     @classmethod
-    def for_defender(cls, hand: list[Card], rule: VariantRule) -> "KnownSet":
+    def for_defender(cls, hand: list[Card], rule: VariantRule) -> KnownSet:
         """非庄家视角：只知道自己的手牌，底牌是未知牌堆。"""
         h = Counter(hand)
         if sum(h.values()) != rule.hand_size:
@@ -190,8 +190,7 @@ class UnseenPool:
                 self._counts[face] = rem
 
         # 每个座位当前持牌数（进入出牌阶段时人人都是 hand_size）
-        self._seat_holds: dict[int, int] = {
-            s: rule.hand_size for s in range(rule.players)}
+        self._seat_holds: dict[int, int] = dict.fromkeys(range(rule.players), rule.hand_size)
         self._bottom_unknown = known.bottom_unknown_capacity
         self._check()
 

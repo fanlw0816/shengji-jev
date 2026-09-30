@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal, Union
+from typing import Literal
 
 import numpy as np
 
@@ -79,4 +79,4 @@ class PendingItem:
     trick_index: int
 
 
-Event = Union[PlayEvent, TrickEndEvent, PendingItem]
+Event = PlayEvent | TrickEndEvent | PendingItem

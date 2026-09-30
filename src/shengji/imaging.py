@@ -71,8 +71,8 @@ def card_mask(img: np.ndarray) -> np.ndarray:
 def zone_rect(name: str) -> tuple[int, int, int, int]:
     """按常量返回四区在参考坐标系下的 (x0, y0, x1, y1)。"""
     cx, cy = C.REF_ZONE_CENTERS[name]
-    x0 = int(round(cx - C.ZONE_W / 2))
-    y0 = int(round(cy - C.ZONE_H / 2))
+    x0 = round(cx - C.ZONE_W / 2)
+    y0 = round(cy - C.ZONE_H / 2)
     return x0, y0, x0 + C.ZONE_W, y0 + C.ZONE_H
 
 
@@ -143,7 +143,7 @@ def measure_card_width(img: np.ndarray) -> float | None:
         return None
     observed = float(np.median(widths))
     best_w, best_err = observed, 1e9
-    for k in range(0, 6):
+    for k in range(6):
         cand = observed - k * C.CARD_STACK_OFFSET
         err = abs(cand - C.CARD_W)
         if err < best_err:

@@ -298,7 +298,6 @@ def _app_with_pool(hand=None, **kw) -> CounterApp:
 
 def test_trick_end_feeds_void_tracker():
     """墩结束时把本墩出牌回放给空门追踪器：跟不出领出花色的某家被记为空门。"""
-    from shengji.cards import Card
 
     app = _app_with_pool()
     # 领出方 = 上家（left，座位 3）出 ♥5；对家（top，座位 2）跟 ♦6 → 对家对红桃空门

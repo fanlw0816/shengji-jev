@@ -87,8 +87,8 @@ def test_occupied_zones_have_no_blob_split(shots):
 def test_select_anchor_uses_top_left_on_fixtures(shots):
     """夹具本身就是参考分辨率下的整幅画面，H1 应当通过。"""
     for state in ("others_one", "all_two", "next_two"):
-        model, rep, mode = select_anchor(shots[state], (0, 0, 1280, 720),
-                                         LayoutModel.from_reference())
+        _model, rep, mode = select_anchor(shots[state], (0, 0, 1280, 720),
+                                          LayoutModel.from_reference())
         assert mode is AnchorMode.TOP_LEFT
         assert rep.ok, [v.detail for v in rep.violations]
         assert rep.verifiable
@@ -96,8 +96,8 @@ def test_select_anchor_uses_top_left_on_fixtures(shots):
 
 def test_select_anchor_on_empty_frame_is_unverified_but_accepted(shots):
     """空桌无法校验，应接受 H1 并把 verifiable=False 传递出去。"""
-    model, rep, mode = select_anchor(shots["empty"], (0, 0, 1280, 720),
-                                     LayoutModel.from_reference())
+    _model, rep, mode = select_anchor(shots["empty"], (0, 0, 1280, 720),
+                                      LayoutModel.from_reference())
     assert mode is AnchorMode.TOP_LEFT
     assert rep.ok
     assert not rep.verifiable

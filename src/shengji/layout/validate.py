@@ -13,7 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from math import hypot
 
-import cv2
 import numpy as np
 
 from .. import constants as C

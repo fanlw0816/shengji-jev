@@ -23,9 +23,9 @@
 | Plan 4b | 牌局引擎：记账模型（已知集合 / 未见牌池 / 未知底牌堆） | ✅ **已实现并验证** |
 | Plan 5 | 悬浮窗 UI（PySide6） | ✅ **显示/热键/穿透/推断行/异常行/交互式纠正面板均已实现并验证** |
 | Plan 6 | 按家推断（功能 B） | ✅ **已实现并验证**（引擎 31 项 + UI 接线断言全部执行通过） |
-| Plan 7 | **推荐出牌**（功能 D） | ⬜ **仅规划，未实现**（设计稿见 [Plan 7](docs/superpowers/plans/2026-09-29-play-recommendation.md)） |
+| Plan 7 | **推荐出牌**（功能 D） | 🟡 **7a 合法着法枚举已实现并验收**；7b/7c/7d 未实现（设计稿见 [Plan 7](docs/superpowers/plans/2026-09-29-play-recommendation.md)） |
 
-**当前测试：463 项**（`uv run pytest`）。
+**当前测试：516 项**（`uv run pytest`）。静态检查：`uv run ruff check src tests`、`uv run mypy` 均无告警。
 
 > 📌 **关于 numpy 版本上限**：numpy 自 **2.4.0** 起把官方 wheel 的编译基线抬到
 > **x86-64-v2**（要求 SSE4.2 + POPCNT）。若在 KVM/VMware 等虚拟机里跑、且 hypervisor
@@ -42,7 +42,9 @@
 
 ```bash
 uv sync                 # 建虚拟环境并安装依赖（含可编辑安装本项目）
-uv run pytest -q        # 跑测试（463 项，含 4 张真实截图的端到端验收）
+uv run pytest -q        # 跑测试（516 项，含 4 张真实截图的端到端验收）
+uv run ruff check src tests   # 风格与常见缺陷
+uv run mypy                   # 类型检查
 ```
 
 ### 运行记牌器
@@ -292,14 +294,18 @@ src/shengji/
   recognition/      patch(角标切片) · templates(字形模板库) · classify(投票+置信度)
   events/           phash(去重) · ringbuffer(回溯) · pending(待确认队列) · pipeline(状态机)
   engine/           trump(主牌次序) · trick(墩赢家) · accounting(记账) · inference(按家推断)
+                    · legal(合法着法枚举，Plan 7a)
   session.py        会话状态（与 Qt 无关，纯单测覆盖）
   replay.py         事件溯源重放（纠正后按事件日志重建状态）
+  scenario.py       离线事件语料（事件序列 → 期望终态，回归资产）
   ui/               viewmodel(纯函数) · correction(纠正面板模型) · overlay · hotkeys · app
-  calib/store.py    标定 JSON 读写
+  calib/store.py    标定 JSON 读写（`--calib`，不传则退回参考布局）
   tools/            dump_layout(布局标注) · record(采样录制) · label_templates · run_counter
 
-tests/              463 项测试
+calib.example.json  示例标定（格式说明 + 标定模板，与参考布局一致）
+tests/              516 项测试
   fixtures/screenshots/   4 张真实截图（端到端验收的数据源）
+  fixtures/scenarios/     7 条离线事件语料（边界场面，见 docs）
 spike/              实测脚本与性能证据（非产品代码）
 docs/               设计文档 · 实现计划 · 调研笔记
 ```

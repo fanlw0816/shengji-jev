@@ -344,9 +344,11 @@ class CounterApp(QObject):
             self._inference = None
             return
         try:
+            # 空门信息缺失只会让推断**变宽**（保守方向），因此不阻断推断
+            voids_map = self.voids.as_mapping() if self.voids is not None else {}
             self._inference = infer_per_seat(
                 self.pool, self.session.trump,
-                voids=self.voids.as_mapping(),
+                voids=voids_map,
                 own_hand_remaining=self.own_hand_remaining(),
             )
         except InferenceError as exc:

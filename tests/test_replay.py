@@ -10,7 +10,7 @@
 from shengji.cards import Card
 from shengji.engine.accounting import get_variant_rule
 from shengji.engine.trump import parse_trump
-from shengji.events.types import PendingItem, PlayEvent, TrickEndEvent
+from shengji.events.types import PlayEvent, TrickEndEvent
 from shengji.replay import (
     ReplayContext,
     apply_event,
@@ -182,8 +182,8 @@ def test_unrecognised_play_skips_void_deduction():
     """有一手没认出来 -> 整墩不推空门（缺一手会把跟牌关系推歪）。"""
     ctx = _ctx(_hand())
     state = new_state(ctx)
-    plays = list((_play("left", 5, 1, 1.0), _play("top", 6, 2, 1.1),
-                  _play("right", 7, 1, 1.2)))
+    plays = [_play("left", 5, 1, 1.0), _play("top", 6, 2, 1.1),
+             _play("right", 7, 1, 1.2)]
     plays[1] = PlayEvent(zone="top", cards=None, count=1, confidence=0.0,
                          frame_agreement=0.0, trick_index=0, frame_ts=1.1)
 

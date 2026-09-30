@@ -29,9 +29,69 @@ packages = ["src/shengji"]
 dev = [
     "pytest>=9.1.1",
     "pytest-qt>=4.5.0",
+    "ruff>=0.14",
+    "mypy>=1.18",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+
+# --- 静态检查 ---
+# 之前没有配置，于是 `ruff check` 会用**环境里飘进来的规则集**（本机跑出过 79 项，
+# 换成默认规则只剩 20 项）—— 结果不可复现。这里把规则集显式定死。
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = [".venv", "spike", ".workbuddy"]
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9",  # pycodestyle 真错误（不含 E501 行长：中文注释允许长行）
+    "F",               # pyflakes
+    "W",               # pycodestyle 警告
+    "I",               # import 排序
+    "UP",              # pyupgrade
+    "B",               # bugbear
+    "C4",              # comprehension 简化
+    "PIE",             # 杂项
+    "RUF",             # ruff 自有规则
+]
+ignore = [
+    # 本项目**故意**在降级与兜底路径上捕获宽异常（例如识别失败退回"只报张数"），
+    # 每一处都写明了理由，且失败一律落到 last_message 让用户看见 —— 不违反「失败要可见」。
+    "BLE001",
+    "S110",
+    # RUF001/002/003 把中文全角标点（，。：（））判为"易混淆字符"。
+    # 本项目注释与文档一律中文，这在其语境下是**正确用法**，不是缺陷。
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # `class X(str, Enum)` -> `StrEnum` 会改变 str() 与格式化行为（影响 JSON 落盘）。
+    # 那是行为变更而不是缺陷修复，须单独评估，不随静态检查一起改。
+    "UP042",
+]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+ignore_missing_imports = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+# PySide6 的官方 stub 与运行期不一致：`Qt.FramelessWindowHint` 这类枚举成员
+# 在 stub 里被判为不存在，`QApplication.instance()` 被标成 `QCoreApplication`。
+# 这些是**第三方 stub 的局限，不是本项目的缺陷** —— 按模块关掉具体错误码，
+# 而不是撒一堆 `# type: ignore` 把真正的错误一起淹掉。
+[[tool.mypy.overrides]]
+module = ["shengji.ui.overlay"]
+disable_error_code = ["attr-defined", "return-value"]
+
+[[tool.mypy.overrides]]
+module = ["shengji.imaging", "shengji.tools.label_templates"]
+disable_error_code = ["call-overload", "assignment", "arg-type"]

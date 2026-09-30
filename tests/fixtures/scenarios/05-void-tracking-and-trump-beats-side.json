@@ -1,0 +1,26 @@
+{
+  "name": "空门推导 + 主牌压副牌",
+  "description": "领出 ♥5，下家垫了一张 ♠3 —— 主牌为 ♠，所以下家是「有该花色必须跟」这条规则的直接反例：他手上没有 ♥，于是空门被推导出来（组号 1 = ♥）。同时 ♠3 是主牌，直接压过领出的红桃拿到本墩。",
+  "players": 4,
+  "decks": 2,
+  "trump": "S2",
+  "zone_to_seat": {"bottom": 0, "right": 1, "top": 2, "left": 3},
+  "events": [
+    {"type": "play", "zone": "bottom", "cards": ["H5"], "trick": 0, "ts": 1.0},
+    {"type": "play", "zone": "right", "cards": ["S3"], "trick": 0, "ts": 1.1},
+    {"type": "play", "zone": "top", "cards": ["H4"], "trick": 0, "ts": 1.2},
+    {"type": "play", "zone": "left", "cards": ["H6"], "trick": 0, "ts": 1.3},
+    {"type": "trick_end", "trick": 0, "ts": 1.5, "plays": ["bottom", "right", "top", "left"]}
+  ],
+  "expect": {
+    "trick_index": 1,
+    "history_len": 1,
+    "total_points": 5,
+    "points": {"right": 5},
+    "history": [
+      {"points": 5, "winner_zone": "right", "points_known": true, "confident": true}
+    ],
+    "voids": {"0": [], "1": [1], "2": [], "3": []},
+    "errors_empty": true
+  }
+}

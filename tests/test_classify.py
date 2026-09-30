@@ -1,4 +1,3 @@
-import numpy as np
 
 from shengji.cards import Card
 from shengji.layout.model import LayoutModel
@@ -10,10 +9,7 @@ from shengji.recognition.classify import (
     vote_frames,
 )
 from shengji.recognition.types import CardRead, RecognitionResult, ZoneRead
-
 from tests.test_templates import (
-    RANK_LABELS,
-    SUIT_LABELS,
     _built_library,
     _corner_from_glyphs,
     _rank_glyph,
@@ -24,7 +20,6 @@ from tests.test_templates import (
 def _make_patch(zone: str, slot: int, rank: str, suit: str):
     """构造一个 CardPatch，角标由合成字形拼成。"""
     from shengji.recognition.patch import CardPatch, split_patches
-    from shengji import constants as C
 
     corner = _corner_from_glyphs(_rank_glyph(rank), _suit_glyph(suit))
     rp, sp = split_patches(corner)

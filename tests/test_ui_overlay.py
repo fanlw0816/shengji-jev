@@ -181,9 +181,11 @@ def test_set_view_hides_inference_and_message_when_empty(overlay):
 
 def _row(index: int = 0, zone: str = "bottom", trick: int = 1,
          reason: str = "low_confidence",
-         proposed=(Card(rank=14, suit=S),)) -> PendingRow:
+         proposed: tuple[Card, ...] | None = None) -> PendingRow:
     return PendingRow(index=index, trick_index=trick, zone=zone, seat=0,
-                      reason=reason, proposed=tuple(proposed))
+                      reason=reason,
+                      proposed=proposed if proposed is not None
+                      else (Card(rank=14, suit=S),))
 
 
 def test_correction_panel_stays_hidden_while_transparent(overlay):

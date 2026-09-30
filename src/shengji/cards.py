@@ -53,11 +53,11 @@ class Card:
                 raise ValueError(f"非法 suit: {self.suit}")
 
     @classmethod
-    def small_joker(cls) -> "Card":
+    def small_joker(cls) -> Card:
         return cls(rank=0, suit=0, joker=JOKER_SMALL)
 
     @classmethod
-    def big_joker(cls) -> "Card":
+    def big_joker(cls) -> Card:
         return cls(rank=0, suit=0, joker=JOKER_BIG)
 
     @property
@@ -93,10 +93,10 @@ def parse_code(code: str) -> Card | None:
     if len(code) < 2:
         return None
     letter, rank_part = code[0], code[1:]
-    suit = next((s for s, l in SUIT_LETTERS.items() if l == letter), None)
+    suit = next((s for s, lbl in SUIT_LETTERS.items() if lbl == letter), None)
     if suit is None:
         return None
-    rank = next((r for r, l in RANK_LABELS.items() if l == rank_part), None)
+    rank = next((r for r, lbl in RANK_LABELS.items() if lbl == rank_part), None)
     if rank is None:
         return None
     return Card(rank=rank, suit=suit)

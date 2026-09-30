@@ -64,7 +64,7 @@ class GlyphTemplate:
         return {"label": self.label, "vector": [round(float(v), 5) for v in self.vector]}
 
     @classmethod
-    def from_json(cls, d: dict) -> "GlyphTemplate":
+    def from_json(cls, d: dict) -> GlyphTemplate:
         return cls(label=str(d["label"]),
                    vector=np.asarray(d["vector"], dtype=np.float32))
 
@@ -139,7 +139,7 @@ class TemplateLibrary:
                 "suits": [t.to_json() for t in self.suits]}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "TemplateLibrary":
+    def from_dict(cls, d: dict) -> TemplateLibrary:
         return cls(ranks=[GlyphTemplate.from_json(x) for x in d.get("ranks", [])],
                    suits=[GlyphTemplate.from_json(x) for x in d.get("suits", [])])
 
@@ -150,7 +150,7 @@ class TemplateLibrary:
                      encoding="utf-8")
 
     @classmethod
-    def load(cls, path: str | Path) -> "TemplateLibrary | None":
+    def load(cls, path: str | Path) -> TemplateLibrary | None:
         """读取模板库。文件缺失或损坏返回 None，绝不抛异常。"""
         p = Path(path)
         if not p.exists():
