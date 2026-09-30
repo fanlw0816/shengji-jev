@@ -102,11 +102,14 @@ def test_trick_scoring_trump_beats_lead_suit():
 
 def test_trick_scoring_uses_accumulated_plays_when_event_carries_none():
     s = SessionState(trump=TRUMP_S_LEVEL2)
-    s.apply(_play("bottom", [Card(rank=5, suit=H)]))
-    s.apply(_play("right", [Card(rank=10, suit=H)]))
+    for zone, card, ts in (("bottom", Card(rank=5, suit=H), 1.0),
+                           ("right", Card(rank=10, suit=H), 1.1),
+                           ("top", Card(rank=3, suit=H), 1.2),
+                           ("left", Card(rank=4, suit=H), 1.3)):
+        s.apply(_play(zone, [card], ts=ts))
     s.apply(TrickEndEvent(trick_index=0, frame_ts=9.0, plays=()))
     rec = s.history[0]
-    assert len(rec.plays) == 2
+    assert len(rec.plays) == 4
     assert rec.points == 15
     assert rec.winner_zone == "right"
 
@@ -197,15 +200,53 @@ def test_trick_record_defaults():
 def test_multiple_tricks_accumulate_points():
     s = SessionState(trump=TRUMP_S_LEVEL2)
     for t in range(2):
-        plays = [_play("bottom", [Card(rank=5, suit=H)], trick=t),
-                 _play("right", [Card(rank=10, suit=H)], trick=t)]
-        s.apply(PlayEvent(zone="bottom", cards=(Card(rank=5, suit=H),), count=1,
-                          confidence=1.0, frame_agreement=1.0,
-                          trick_index=t, frame_ts=float(t)))
-        s.apply(PlayEvent(zone="right", cards=(Card(rank=10, suit=H),), count=1,
-                          confidence=1.0, frame_agreement=1.0,
-                          trick_index=t, frame_ts=float(t) + 0.1))
+        for zone, card, offset in (("bottom", Card(rank=5, suit=H), 0.0),
+                                   ("right", Card(rank=10, suit=H), 0.1),
+                                   ("top", Card(rank=3, suit=H), 0.2),
+                                   ("left", Card(rank=4, suit=H), 0.3)):
+            s.apply(_play(zone, [card], ts=float(t) + offset, trick=t))
         s.apply(TrickEndEvent(trick_index=t, frame_ts=float(t) + 1, plays=()))
     assert s.trick_index == 2
     assert len(s.history) == 2
     assert s.points["right"] == 30      # 两墩各 15 分
+
+
+def test_incomplete_trick_does_not_score():
+    """本墩缺人时先不算分。
+
+    低置信那一手被门控在待确认队列里，根本不在 `plays` 中；
+    拿剩下的三手算赢家可能算出**另一个**赢家 —— 那是静默算错分数。
+    正确做法是先标记未知，等用户补录后按事件日志重放再算。
+    """
+    s = SessionState(trump=TRUMP_S_LEVEL2)
+    s.apply(_play("bottom", [Card(rank=10, suit=H)], ts=1.0))
+    s.apply(_play("right", [Card(rank=5, suit=H)], ts=1.1))
+    s.apply(TrickEndEvent(trick_index=0, frame_ts=9.0, plays=()))
+
+    rec = s.history[0]
+    assert not rec.points_known
+    assert not rec.confident
+    assert rec.winner_zone is None
+    assert s.points["bottom"] == 0
+    assert s.points["right"] == 0
+
+
+def test_winner_is_recorded_by_seat_not_by_play_order():
+    """赢家按**座位号**归属，不能按 `plays` 的下标。
+
+    出牌顺序与座位顺序无关（领出者可能是任何人）。用下标索引 `rec.plays`，
+    在顺序不一致时会把这一墩记到**别人**头上 —— 分数直接记错人。
+    """
+    s = SessionState(trump=TRUMP_S_LEVEL2)
+    # 出牌顺序：自己(0) → 上家(3) → 对家(2) → 下家(1)，不是座位序
+    for zone, card, ts in (("bottom", Card(rank=5, suit=H), 1.0),
+                           ("left", Card(rank=6, suit=H), 1.1),
+                           ("top", Card(rank=7, suit=H), 1.2),
+                           ("right", Card(rank=10, suit=H), 1.3)):
+        s.apply(_play(zone, [card], ts=ts))
+    s.apply(TrickEndEvent(trick_index=0, frame_ts=9.0, plays=()))
+
+    rec = s.history[0]
+    assert rec.winner_zone == "right"          # ♥10 最大
+    assert s.points["right"] == 15
+    assert s.points["left"] == 0               # plays[1] 是上家，但它没赢

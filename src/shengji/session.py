@@ -86,6 +86,14 @@ class SessionState:
             rec.points_known = False
             rec.confident = False
             return
+        if len(rec.plays) < len(self.seats):
+            # 本墩缺人：低置信那一手被门控在待确认队列里（设计文档 §9.1），
+            # 或看门狗判定有牌一闪而过。**先不算分** ——
+            # 少一手的墩算出的赢家可能根本不是真赢家，那就是静默算错。
+            # 用户补录后按事件日志重放，这一墩会连同分数一起重算。
+            rec.points_known = False
+            rec.confident = False
+            return
         if self.trump is None:
             rec.points_known = False
             return
@@ -102,10 +110,17 @@ class SessionState:
         rec.points = trick_points(played)
         rec.points_known = True
         rec.confident = outcome.confident
+
+        # ⚠️ `winner_seat` 是**座位号**，不是 `rec.plays` 的下标。
+        # 出牌顺序与座位顺序不一致时（先出的不一定是座位靠前的），
+        # 用下标索引会把这一墩的赢家记到**别人**头上 —— 分数直接记错人。
         idx = outcome.winner_seat
-        if 0 <= idx < len(order):
-            rec.winner_zone = rec.plays[idx].zone
-            self.points[rec.winner_zone] = self.points.get(rec.winner_zone, 0) + rec.points
+        for play, pc in zip(rec.plays, played):
+            if pc.seat == idx:
+                rec.winner_zone = play.zone
+                self.points[rec.winner_zone] = (
+                    self.points.get(rec.winner_zone, 0) + rec.points)
+                break
 
     def _on_pending(self, item: PendingItem) -> None:
         self.pending_count += 1
@@ -125,6 +140,15 @@ class SessionState:
 
     def total_points(self) -> int:
         return sum(self.points.values())
+
+    @property
+    def unscored_tricks(self) -> int:
+        """已结束但**没能计分**的墩数（缺牌 / 牌未识别 / 主牌未知）。
+
+        这些墩不会凭空算一个结果 —— 它们等用户补录后按事件日志重放再重算。
+        必须让用户看见：否则他只会觉得"分数怎么少了"，而不知道是可以补的。
+        """
+        return sum(1 for rec in self.history if rec.plays and not rec.points_known)
 
     @property
     def has_attention(self) -> bool:

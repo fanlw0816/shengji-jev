@@ -21,11 +21,11 @@
 | Plan 3 | 事件层（状态机 / 去重 / 墩边界 / 待确认队列） | ✅ **已实现并验证** |
 | Plan 4a | 牌局引擎：主牌次序（含级牌）+ 墩赢家（单张/对子/拖拉机） | 🟡 **核心已实现并验证**；甩牌判定待补 |
 | Plan 4b | 牌局引擎：记账模型（已知集合 / 未见牌池 / 未知底牌堆） | ✅ **已实现并验证** |
-| Plan 5 | 悬浮窗 UI（PySide6） | 🟡 **显示/热键/穿透/推断行/异常行已完成**；交互式纠正面板未做 |
+| Plan 5 | 悬浮窗 UI（PySide6） | ✅ **显示/热键/穿透/推断行/异常行/交互式纠正面板均已实现并验证** |
 | Plan 6 | 按家推断（功能 B） | ✅ **已实现并验证**（引擎 31 项 + UI 接线断言全部执行通过） |
 | Plan 7 | **推荐出牌**（功能 D） | ⬜ **仅规划，未实现**（设计稿见 [Plan 7](docs/superpowers/plans/2026-09-29-play-recommendation.md)） |
 
-**当前测试：412 项**（`uv run pytest`）。
+**当前测试：463 项**（`uv run pytest`）。
 
 > 📌 **关于 numpy 版本上限**：numpy 自 **2.4.0** 起把官方 wheel 的编译基线抬到
 > **x86-64-v2**（要求 SSE4.2 + POPCNT）。若在 KVM/VMware 等虚拟机里跑、且 hypervisor
@@ -42,7 +42,7 @@
 
 ```bash
 uv sync                 # 建虚拟环境并安装依赖（含可编辑安装本项目）
-uv run pytest -q        # 跑测试（412 项，含 4 张真实截图的端到端验收）
+uv run pytest -q        # 跑测试（463 项，含 4 张真实截图的端到端验收）
 ```
 
 ### 运行记牌器
@@ -56,6 +56,25 @@ uv run python -m shengji.tools.run_counter --trump S2 --templates templates.json
 
 不给 `--trump` 时分牌无法判定，只显示张数；不给模板库时只报告张数不认牌 ——
 两者都会在启动时明确提示，而不是装作能算。
+
+### 纠正识别错误
+
+识别没把握时**不硬猜**：那一手进待确认队列，状态栏显示「有 N 项待确认」。
+按 `Ctrl+Alt+L` 关掉鼠标穿透后，悬浮窗底部出现纠正面板：
+
+| 操作 | 含义 |
+|---|---|
+| 点牌网格 | 选牌；同一张点 2 次 = 两副牌里的 2 张（上限跟着牌堆走） |
+| **采纳识别结果** | 用识别出来的那几张 |
+| **提交所选** | 用手点的牌补录 |
+| **跳过不记账** | 明确放弃这一手 —— 宁可少记一手，也不记错一手 |
+
+补录后**按事件日志重放**，把这一手接回**它原本所属的那一墩**：
+不会挂到当前正在进行的墩上，该墩的赢家与分数一并重算。
+补录前那一墩的分数标为「未知」（缺一手算出的赢家可能不是真赢家）。
+
+> 设计文档 §9.1 定的语义是「按 `frame_ts` 顺序重放」，§10.2 的验收断言是
+> 「重放后状态与无低置信介入的参照序列一致」—— 实现见 `src/shengji/replay.py`。
 
 ### 工具
 
@@ -274,11 +293,12 @@ src/shengji/
   events/           phash(去重) · ringbuffer(回溯) · pending(待确认队列) · pipeline(状态机)
   engine/           trump(主牌次序) · trick(墩赢家) · accounting(记账) · inference(按家推断)
   session.py        会话状态（与 Qt 无关，纯单测覆盖）
-  ui/               viewmodel(纯函数) · overlay(悬浮窗) · hotkeys · app(控制器)
+  replay.py         事件溯源重放（纠正后按事件日志重建状态）
+  ui/               viewmodel(纯函数) · correction(纠正面板模型) · overlay · hotkeys · app
   calib/store.py    标定 JSON 读写
   tools/            dump_layout(布局标注) · record(采样录制) · label_templates · run_counter
 
-tests/              412 项测试
+tests/              463 项测试
   fixtures/screenshots/   4 张真实截图（端到端验收的数据源）
 spike/              实测脚本与性能证据（非产品代码）
 docs/               设计文档 · 实现计划 · 调研笔记

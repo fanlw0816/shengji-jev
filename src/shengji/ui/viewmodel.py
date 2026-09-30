@@ -163,6 +163,11 @@ def build_view(session: SessionState,
         view.pending_text = (f"待确认 {session.pending_count}"
                              f"（低置信 {session.low_confidence_count}"
                              f" / 漏抓 {session.missed_count}）")
+    if session.unscored_tricks:
+        # 有墩没算分就必须说出来 —— 用户看到分数少了，得知道那是可补的
+        count = f"{session.unscored_tricks} 墩分牌待重算"
+        view.pending_text = (f"{view.pending_text} · {count}" if view.pending_text
+                             else count)
     view.message_text = session.last_message
     view.footer = "Ctrl+Alt+L 交互 · Ctrl+Alt+O 快照 · Ctrl+Alt+P 暂停"
     return view

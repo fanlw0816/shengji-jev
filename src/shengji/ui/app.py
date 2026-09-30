@@ -2,12 +2,17 @@
 
 设计上刻意把「每帧做什么」暴露成 `tick_once()`，而不是只藏在 QTimer 回调里，
 这样可以用假后端做确定性测试，不需要真显卡、真游戏或真定时器。
+
+**状态是事件序列的函数**（见 `shengji.replay`）：本类维护一份事件日志，
+正常路径增量应用事件，用户纠正待确认项时按日志**全量重建** ——
+这是设计文档 §9.1「纠正后按 `frame_ts` 顺序重放」的落地方式。
 """
 
 from __future__ import annotations
 
 import time
-from collections import Counter
+from collections.abc import Sequence
+from dataclasses import replace
 
 import numpy as np
 from PySide6.QtCore import QObject, QTimer
@@ -15,8 +20,12 @@ from PySide6.QtCore import QObject, QTimer
 from ..capture.factory import DegradedMode, build_backend, degraded_poll_interval
 from ..cards import Card
 from ..engine.accounting import UnseenPool, get_variant_rule
-from ..engine.inference import InferenceError, SeatInference, VoidTracker, infer_per_seat
-from ..engine.trick import PlayedCards
+from ..engine.inference import (
+    InferenceError,
+    SeatInference,
+    VoidTracker,
+    infer_per_seat,
+)
 from ..engine.trump import TrumpInfo
 from ..events.pending import PendingQueue
 from ..events.pipeline import EventPipeline
@@ -24,10 +33,20 @@ from ..events.ringbuffer import RingBuffer
 from ..events.types import Event, PendingItem, PlayEvent, TrickEndEvent, ZoneState
 from ..layout.model import LayoutModel
 from ..recognition.templates import TemplateLibrary
+from ..replay import (
+    DEFAULT_SEATS,
+    ReplayContext,
+    apply_event,
+    make_corrected_play,
+    merge_trick_play,
+    new_state,
+    replay_events,
+)
 from ..session import SessionState
+from .correction import current_row
 from .hotkeys import HotkeyManager
 from .overlay import OverlayWindow, default_position, ensure_app
-from .viewmodel import build_view
+from .viewmodel import ZONE_LABELS, build_view
 
 DEFAULT_RING_SECONDS = 3.0
 DEFAULT_FPS = 60.0
@@ -94,32 +113,53 @@ class CounterApp(QObject):
             ring=self.ring,
             zone_to_seat=mapping,
         )
-        self.session = SessionState(trump=trump)
-        self.session.degraded_mode = backend_mode.value
+        self.rule = get_variant_rule(players, decks)
+        self.own_seat = own_seat
+
+        # 状态 = f(事件序列)。日志是真相来源，_state 是当前的派生结果；
+        # 纠正时会整体重建，所以外部**不要缓存 session / pool 对象的引用**。
+        self._ctx = ReplayContext(
+            rule=self.rule,
+            seats=DEFAULT_SEATS,
+            trump=trump,
+            own_seat=own_seat,
+            own_hand=None,
+            zone_to_seat=mapping,
+            degraded_mode=backend_mode.value,
+        )
+        self._state = new_state(self._ctx)
+        self._log: list[Event] = []
+        #: 墩级覆盖 {trick_index: 该墩完整 plays} —— 补录的牌落在这里（见 replay 模块）
+        self._trick_overrides: dict[int, tuple[PlayEvent, ...]] = {}
+        # 功能 B：最近一次按家推断结果
+        self._inference: SeatInference | None = None
+
         if not mapping:
             # 归属未标定就必须说出来：出牌会被记到错误的人头上
             self.session.last_message = "未标定区→座位映射，出牌归属不可靠"
 
-        self.rule = get_variant_rule(players, decks)
-        self.own_seat = own_seat
-        self._pool: UnseenPool | None = None
-        # 功能 B：空门追踪器（信息来自墩结束时回放的出牌）+ 最近一次推断结果
-        self.voids = VoidTracker(players)
-        self._inference: SeatInference | None = None
-        self._own_hand: list[Card] | None = None
-        self._own_played: Counter[Card] = Counter()
-
         self.overlay = overlay
+        if self.overlay is not None:
+            self.overlay.set_correction_handler(self._on_correction_submitted)
         self.hotkeys = HotkeyManager() if use_hotkeys else None
         self._timer: QTimer | None = None
         self._interval_ms = max(1, int(degraded_poll_interval(backend_mode) * 1000))
         self.frames_seen = 0
 
-    # ---------- 未见牌池 ----------
+    # ---------- 派生状态的只读入口 ----------
+
+    @property
+    def session(self) -> SessionState:
+        """一局的会话状态。纠正后会整体重建，**不要跨调用缓存这个对象**。"""
+        return self._state.session
 
     @property
     def pool(self) -> UnseenPool | None:
-        return self._pool
+        return self._state.pool
+
+    @property
+    def voids(self) -> VoidTracker | None:
+        return self._state.voids
 
     @property
     def inference(self) -> SeatInference | None:
@@ -127,24 +167,17 @@ class CounterApp(QObject):
         return self._inference
 
     def init_pool(self, known_seat_cards: list[Card] | None = None) -> None:
-        """建立未见牌池。未提供自己手牌时按「整副牌都还没出现」显示。"""
-        from ..engine.accounting import KnownSet
+        """标定自己手牌并（重新）建立未见牌池。
 
-        if known_seat_cards is None:
-            self._pool = None
-            self._own_hand = None
-            return
-        known = KnownSet.for_defender(known_seat_cards, self.rule)
-        self._pool = UnseenPool(self.rule, known, own_seat=self.own_seat)
-        # 自己手牌是**已知**的，留着给按家推断用（推断只推别人，自己那家报确切的）
-        self._own_hand = list(known_seat_cards)
-        self._own_played = Counter()
+        未提供手牌时清空牌池 —— 此时剩余牌统计按「整副牌都还没出现」显示，
+        不假装知道。若日志里已有事件（对局中途才标定手牌的情形），会一并重放。
+        """
+        self._ctx = self._ctx.with_own_hand(known_seat_cards)
+        self._rebuild()
 
     def own_hand_remaining(self) -> list[Card] | None:
         """自己手上还剩哪些牌（已知手牌 − 已打出的）。未标定手牌时返回 None。"""
-        if self._own_hand is None:
-            return None
-        return list((Counter(self._own_hand) - self._own_played).elements())
+        return self._state.own_hand_remaining(self._ctx.own_hand)
 
     # ---------- 帧循环 ----------
 
@@ -152,7 +185,8 @@ class CounterApp(QObject):
                   ts: float | None = None) -> list[Event]:
         """处理一帧。frame_image 为 None 时向采集后端取一帧。
 
-        返回本帧产生的事件。暂停时直接返回空列表，不消费帧。
+        返回本帧产生的事件。暂停时直接返回空列表，不消费帧 ——
+        若暂停期间继续消费帧，那些帧会被悄悄吃掉，而用户以为只是在暂停显示。
         """
         if self.session.paused:
             return []
@@ -167,66 +201,151 @@ class CounterApp(QObject):
 
         self.frames_seen += 1
         events = self.pipeline.on_frame(frame_image, ts)
-        for e in events:
-            self.session.apply(e)
-            self._update_pool(e)
+        self._commit(events)
         self.refresh()
         return events
 
-    def _update_pool(self, event: Event) -> None:
-        if self._pool is None:
-            return
-        if isinstance(event, PlayEvent) and event.cards is not None:
-            seat = self.pipeline.zone_to_seat.get(event.zone, self.own_seat)
-            try:
-                self._pool.on_play(seat, list(event.cards))
-            except Exception as exc:  # 不变式被破坏 -> 记下来，不静默继续
-                self.session.last_message = f"记账异常：{exc}"
-            if seat == self.own_seat:
-                self._own_played.update(event.cards)
-        elif isinstance(event, TrickEndEvent):
-            self._track_voids(event)
+    def _commit(self, events: Sequence[Event]) -> None:
+        """把事件并入日志并增量应用。
+
+        应用逻辑与重放路径**共用同一个函数**（见 `shengji.replay`）——
+        两条路径若各写一遍，迟早会出现「纠正后结果与不纠正时不一致」的缺陷。
+        """
+        for e in events:
+            self._log.append(e)
+            msg = apply_event(self._state, e, self._ctx,
+                              trick_overrides=self._trick_overrides)
+            if msg:
+                # 不变式被破坏就显示出来，绝不静默继续算
+                self.session.last_message = msg
+
+    # ---------- 纠正面板（设计文档 §9.1 / §14.1）----------
+
+    @property
+    def pending_items(self) -> tuple[PendingItem, ...]:
+        """尚未处理完的待确认项（按 `frame_ts` 有序）。"""
+        return self.pending.items
+
+    @property
+    def pending_first(self) -> PendingItem | None:
+        """队首待确认项 —— 纠正面板一次只处理一项，从最早的开始。"""
+        return self.pending.next()
+
+    def resolve_pending(self, item: PendingItem,
+                        cards: Sequence[Card] | None = None,
+                        *, drop: bool = False) -> bool:
+        """处理一项待确认，返回是否确实处理掉了。
+
+        - `cards` 非空：用户给出的**正确牌**（"采纳识别结果"传 `item.proposed_cards`）
+        - `drop=True`：用户明确放弃记账（宁可少记一手，也不记错一手）
+
+        做法是**把它从事件日志里摘掉、再把正确的一手并回该墩，然后整体重放**。
+        不就地补一张牌的原因：低置信那一手原本不在 `TrickEndEvent.plays` 里，
+        就地补录会把它挂到**当前正在进行的墩**上 —— 那是静默算错。
+        """
+        if not self._forget_from_log(item):
+            # 不在日志里 —— 已被处理过，或不是本应用产生的项
+            return False
+        self.pending.resolve(item)
+
+        label = ZONE_LABELS.get(item.zone, item.zone)
+        if not drop and cards:
+            play = make_corrected_play(zone=item.zone, cards=cards,
+                                       trick_index=item.trick_index,
+                                       frame_ts=item.frame_ts)
+            base = self._trick_plays_for(item.trick_index)
+            self._trick_overrides[item.trick_index] = merge_trick_play(base, play)
+            # 两件事都要做，少一件就有一半状态是错的：
+            #   · 进日志 -> 走一次出牌事件，牌池/自己手牌跟着扣
+            #   · 进墩覆盖 -> `TrickEndEvent.plays` 会**覆盖**累积记录，
+            #     不并进覆盖里那手会被丢掉，这一墩按缺人处理
+            self._insert_play_into_log(play)
+            message = (f"已补录 第 {item.trick_index + 1} 墩 {label}："
+                       + " ".join(c.label() for c in cards))
+        else:
+            message = f"已跳过 第 {item.trick_index + 1} 墩 {label}（不计入记账）"
+
+        errors = self._rebuild()
+        # 重放出的不变式问题优先显示 —— 它比"补录成功"更需要用户看见
+        self.session.last_message = errors[-1] if errors else message
+        return True
+
+    def _insert_play_into_log(self, play: PlayEvent) -> None:
+        """把补录的一手插到日志中**它该在的位置**。
+
+        位置必须落在本墩 `TrickEndEvent` 之前、且按 `frame_ts` 排好 ——
+        直接 append 的话，`SessionState` 会把它算到别的墩上（顺序错了，
+        账面就跟着错，而且看起来像是"识别错了"）。
+        """
+        bound = len(self._log)
+        for i, ev in enumerate(self._log):
+            if isinstance(ev, TrickEndEvent) and ev.trick_index == play.trick_index:
+                bound = i
+                break
+        pos = bound
+        while pos > 0 and self._log[pos - 1].frame_ts > play.frame_ts:
+            pos -= 1
+        self._log.insert(pos, play)
+
+    def _forget_from_log(self, item: PendingItem) -> bool:
+        """把某一项从事件日志中摘掉。
+
+        按**身份**比较（`is`）而非 dataclass 相等性：两个字段完全相同的
+        待确认项理论上可能同时存在，按相等性删除会误删更早的那个。
+        """
+        for i, ev in enumerate(self._log):
+            if ev is item:
+                del self._log[i]
+                return True
+        return False
+
+    def _trick_plays_for(self, trick_index: int) -> tuple[PlayEvent, ...]:
+        """取某墩当前已知的出牌（优先取覆盖表 —— 它含此前已补录的牌）。"""
+        existing = self._trick_overrides.get(trick_index)
+        if existing is not None:
+            return existing
+        for ev in self._log:
+            if isinstance(ev, TrickEndEvent) and ev.trick_index == trick_index:
+                return ev.plays
+        return ()
+
+    def _sync_context(self) -> None:
+        """把会话里的**非派生**字段收回 `ctx`。
+
+        重建会新建一个 `SessionState`，而主牌 / 暂停 / 降级档位不是由事件推导出来的 ——
+        不收回就会在纠正后被打回构造时的初值（"纠正一次主牌就丢了"这类失效
+        在测试之外很难被发现）。派生字段（墩次、分数、待确认计数）不回填，
+        它们正是重放要重算的东西。
+        """
+        self._ctx = replace(self._ctx,
+                            trump=self.session.trump,
+                            paused=self.session.paused,
+                            degraded_mode=self.session.degraded_mode)
+
+    def _rebuild(self) -> list[str]:
+        """按事件日志从零重建全部派生状态，返回重放中出现的错误消息。
+
+        这是设计文档 §9.1 的「按 `frame_ts` 顺序重放」：
+        正常路径是增量应用，只有用户纠正时才走全量重建。
+        """
+        self._sync_context()
+        self._state, errors = replay_events(self._log, self._ctx,
+                                            trick_overrides=self._trick_overrides)
+        if errors:
+            self.session.last_message = errors[-1]
+        self.refresh()
+        return errors
 
     # ---------- 功能 B：按家推断 ----------
 
-    def _track_voids(self, event: TrickEndEvent) -> None:
-        """墩结束时把本墩出牌喂给空门追踪器（设计文档 §7.4.2 的信息来源）。
-
-        **领出方判定用 `frame_ts` 最早的那一手** —— 这是现有信号里最好的近似
-        （区是"摆定后"才出事件的，摆定时刻即该手牌出现时刻的近似）。
-        若最早两手同帧落定，则谁领出无法判定，此时宁可不推（保守放弃）。
-
-        有任一手未识别（`cards is None`）、或某个区的座位归属未标定时也放弃 ——
-        缺一手、错归属都会把跟牌关系推歪，而**推歪空门会破坏 soundness**，
-        不只是变宽而已。
-        """
-        if self.session.trump is None or len(event.plays) < 2:
-            return
-        entries: list[tuple[float, int, tuple[Card, ...]]] = []
-        for p in event.plays:
-            if p.cards is None:
-                return
-            seat = self.pipeline.zone_to_seat.get(p.zone)
-            if seat is None:
-                return
-            entries.append((p.frame_ts, int(seat), p.cards))
-        entries.sort(key=lambda e: e[0])
-        if entries[0][0] == entries[1][0]:
-            return
-        try:
-            self.voids.on_trick([PlayedCards(seat=s, cards=c) for _, s, c in entries],
-                                self.session.trump)
-        except InferenceError as exc:
-            self.session.last_message = f"空门推断异常：{exc}"
-
     def _recompute_inference(self) -> None:
         """重算按家推断范围。矛盾时明确报错并撤下面板，不展示可疑结果。"""
-        if self._pool is None or self.session.trump is None:
+        if self.pool is None or self.session.trump is None:
             self._inference = None
             return
         try:
             self._inference = infer_per_seat(
-                self._pool, self.session.trump,
+                self.pool, self.session.trump,
                 voids=self.voids.as_mapping(),
                 own_hand_remaining=self.own_hand_remaining(),
             )
@@ -242,8 +361,26 @@ class CounterApp(QObject):
         self._recompute_inference()
         if self.overlay is None:
             return
-        self.overlay.set_view(build_view(self.session, pool=self._pool,
+        self.overlay.set_view(build_view(self.session, pool=self.pool,
                                          inference=self._inference))
+        item = self.pending_first
+        # key 用「时点 + 区 + 墩」标识队首项：同一项的多次刷新不能重置用户的选择
+        self.overlay.set_correction(
+            current_row(self.pending),
+            pending_total=len(self.pending),
+            key=None if item is None
+            else (item.frame_ts, item.zone, item.trick_index))
+
+    def _on_correction_submitted(self, cards: list[Card], drop: bool) -> None:
+        """悬浮窗纠正面板的回调：处理队首那一项。
+
+        面板一次只编辑队首项，所以这里也固定取队首 —— 若中途队列变了，
+        宁可什么都不做，也不要改错项。
+        """
+        item = self.pending_first
+        if item is None:
+            return
+        self.resolve_pending(item, cards, drop=drop)
 
     # ---------- 热键动作 ----------
 

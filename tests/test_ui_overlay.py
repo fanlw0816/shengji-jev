@@ -11,6 +11,7 @@ from shengji.cards import Card
 from shengji.engine.trump import TrumpInfo
 from shengji.events.types import PendingItem, PlayEvent
 from shengji.session import SessionState
+from shengji.ui.correction import PendingRow
 from shengji.ui.overlay import OverlayWindow, default_position, window_flags
 from shengji.ui.viewmodel import build_view
 
@@ -174,3 +175,158 @@ def test_set_view_hides_inference_and_message_when_empty(overlay):
     assert overlay.inference_label.text() == ""
     assert not overlay.inference_label.isVisibleTo(overlay)
     assert not overlay.message_label.isVisibleTo(overlay)
+
+
+# ---------- 纠正面板（设计文档 §9.1 / §14.1）----------
+
+def _row(index: int = 0, zone: str = "bottom", trick: int = 1,
+         reason: str = "low_confidence",
+         proposed=(Card(rank=14, suit=S),)) -> PendingRow:
+    return PendingRow(index=index, trick_index=trick, zone=zone, seat=0,
+                      reason=reason, proposed=tuple(proposed))
+
+
+def test_correction_panel_stays_hidden_while_transparent(overlay):
+    """默认穿透模式下不露面 —— 它既点不到，留着只会撑大窗口挡住游戏。"""
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    assert not overlay.correction_panel.isVisibleTo(overlay)
+
+
+def test_correction_panel_shows_row_in_interactive_mode(overlay):
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=2, key="a")
+
+    assert overlay.correction_panel.isVisibleTo(overlay)
+    head, proposed, selected = overlay.correction_texts()
+    assert "待确认 1/2" in head
+    assert "第 2 墩" in head and "自己" in head and "低置信" in head
+    assert proposed == "识别：♠A"
+    assert selected == "未选牌"
+
+
+def test_turning_transparency_back_on_hides_the_panel(overlay):
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+    assert overlay.correction_panel.isVisibleTo(overlay)
+
+    overlay.toggle_interactive()          # 回到穿透模式
+
+    assert not overlay.correction_panel.isVisibleTo(overlay)
+
+
+def test_clearing_the_row_hides_the_panel(overlay):
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    overlay.set_correction(None)
+
+    assert not overlay.correction_panel.isVisibleTo(overlay)
+
+
+def test_accept_button_disabled_without_proposal(overlay):
+    """漏抓项没有候选 —— "采纳识别结果"必须禁掉，不能点了没反应。"""
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(reason="missed_play", proposed=()),
+                           pending_total=1, key="a")
+
+    assert not overlay.accept_button.isEnabled()
+    assert "无候选" in overlay.correction_proposed.text()
+
+    overlay.set_correction(_row(), pending_total=1, key="b")
+    assert overlay.accept_button.isEnabled()
+
+
+def test_clicking_card_grid_builds_selection(overlay):
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    overlay.card_button(Card(rank=5, suit=H)).click()
+    overlay.card_button(Card(rank=5, suit=H)).click()      # 两副牌里的第二张
+    overlay.card_button(Card(rank=3, suit=S)).click()
+
+    assert overlay.correction_cards() == [Card(rank=3, suit=S),
+                                          Card(rank=5, suit=H),
+                                          Card(rank=5, suit=H)]
+    assert "已选" in overlay.correction_texts()[2]
+
+
+def test_submit_emits_the_selected_cards(overlay):
+    received: list = []
+    overlay.set_correction_handler(lambda cards, drop: received.append((cards, drop)))
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    overlay.card_button(Card(rank=5, suit=H)).click()
+    overlay.submit_button.click()
+
+    assert len(received) == 1
+    cards, drop = received[0]
+    assert drop is False
+    assert cards == [Card(rank=5, suit=H)]
+
+
+def test_submit_is_disabled_until_something_is_picked(overlay):
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    assert not overlay.submit_button.isEnabled()
+
+    overlay.card_button(Card(rank=5, suit=H)).click()
+    assert overlay.submit_button.isEnabled()
+
+
+def test_accept_emits_the_recognised_cards(overlay):
+    received: list = []
+    overlay.set_correction_handler(lambda cards, drop: received.append((cards, drop)))
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    overlay.accept_button.click()
+
+    assert received == [([Card(rank=14, suit=S)], False)]
+
+
+def test_skip_emits_drop_with_no_cards(overlay):
+    """跳过 = 用户明确放弃记账，必须让上层知道这是"丢"而不是"补"。"""
+    received: list = []
+    overlay.set_correction_handler(lambda cards, drop: received.append((cards, drop)))
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    overlay.skip_button.click()
+
+    assert received == [([], True)]
+
+
+def test_refreshing_the_same_item_keeps_the_selection(overlay):
+    """`refresh()` 每帧都调 `set_correction` —— 不能把用户刚点的牌清掉。"""
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key=("a",))
+    overlay.card_button(Card(rank=5, suit=H)).click()
+
+    overlay.set_correction(_row(), pending_total=1, key=("a",))   # 同一项再刷一次
+
+    assert overlay.correction_cards() == [Card(rank=5, suit=H)]
+
+
+def test_switching_to_another_item_resets_the_selection(overlay):
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=2, key=("a",))
+    overlay.card_button(Card(rank=5, suit=H)).click()
+
+    overlay.set_correction(_row(index=1, zone="top"), pending_total=2, key=("b",))
+
+    assert overlay.correction_cards() == []
+    assert "对家" in overlay.correction_texts()[0]
+
+
+def test_no_handler_means_clicks_are_harmless(overlay):
+    """没接线时点击不能崩 —— 面板不该假设上层一定注册了回调。"""
+    overlay.apply_interactive(True)
+    overlay.set_correction(_row(), pending_total=1, key="a")
+
+    overlay.accept_button.click()
+    overlay.skip_button.click()
+    overlay.card_button(Card(rank=5, suit=H)).click()
+    overlay.submit_button.click()

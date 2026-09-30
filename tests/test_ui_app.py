@@ -253,7 +253,7 @@ def test_pool_invariant_breakage_is_surfaced_not_swallowed():
     ev = PlayEvent(zone="top", cards=(Card(rank=14, suit=1),), count=1,
                    confidence=1.0, frame_agreement=1.0,
                    trick_index=0, frame_ts=1.0)
-    app._update_pool(ev)          # 不应抛异常
+    app._commit([ev])          # 不应抛异常
 
     assert "记账异常" in app.session.last_message
     assert "已知集合之外" in app.session.last_message
@@ -304,7 +304,7 @@ def test_trick_end_feeds_void_tracker():
     # 领出方 = 上家（left，座位 3）出 ♥5；对家（top，座位 2）跟 ♦6 → 对家对红桃空门
     plays = _plays(("left", 5, 1, 1.0), ("top", 6, 2, 1.1),
                    ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3))
-    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays))
+    app._commit([TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays)])
 
     assert app.voids.is_void(2, 1), "对家的红桃空门没有被记录"
     assert not app.voids.is_void(3, 1)
@@ -315,7 +315,7 @@ def test_ambiguous_lead_order_skips_void_deduction():
     app = _app_with_pool()
     plays = _plays(("left", 5, 1, 1.0), ("top", 6, 2, 1.0),
                    ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3))
-    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays))
+    app._commit([TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays)])
     assert app.voids.deductions == 0
 
 
@@ -326,7 +326,7 @@ def test_unrecognised_play_skips_void_deduction():
                         ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3)))
     plays[1] = PlayEvent(zone="top", cards=None, count=1, confidence=0.0,
                          frame_agreement=0.0, trick_index=0, frame_ts=1.1)
-    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=tuple(plays)))
+    app._commit([TrickEndEvent(trick_index=0, frame_ts=1.4, plays=tuple(plays))])
     assert app.voids.deductions == 0
 
 
@@ -337,7 +337,7 @@ def test_void_exclusion_shows_up_in_inference():
     app = _app_with_pool()
     plays = _plays(("left", 5, 1, 1.0), ("top", 6, 2, 1.1),
                    ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3))
-    app._update_pool(TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays))
+    app._commit([TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays)])
     app.refresh()                      # refresh 里重算推断（overlay 为 None 时直接返回）
 
     inf = app.inference
@@ -357,7 +357,7 @@ def test_own_hand_remaining_tracks_own_plays():
 
     ev = PlayEvent(zone="bottom", cards=(hand[0],), count=1, confidence=1.0,
                    frame_agreement=1.0, trick_index=0, frame_ts=1.0)
-    app._update_pool(ev)
+    app._commit([ev])
     assert len(app.own_hand_remaining()) == 24
     assert hand[0] not in app.own_hand_remaining()
 
@@ -388,3 +388,195 @@ def test_degraded_mode_recorded_on_session():
 
     app = _app([], backend_mode=DegradedMode.MSS)
     assert app.session.degraded_mode == "mss"
+
+
+# ---------- 纠正面板：事件重放（设计文档 §9.1 / §10.2）----------
+
+_TRICK_PLAYS = (("left", 5, 1, 1.0), ("top", 6, 2, 1.1),
+                ("right", 7, 1, 1.2), ("bottom", 8, 1, 1.3))
+
+
+def _reference_app() -> CounterApp:
+    """参照序列：四手全部正常识别，没有低置信介入。"""
+    app = _app_with_pool()
+    plays = _plays(*_TRICK_PLAYS)
+    app._commit([*plays, TrickEndEvent(trick_index=0, frame_ts=1.4, plays=plays)])
+    return app
+
+
+def _intervened_app():
+    """介入序列：自己的那一手低置信被门控，其余三手照常提交。
+
+    注意 `TrickEndEvent.plays` 里**没有**那一手 —— 这正是待确认队列要补的洞。
+    """
+    from shengji.cards import Card
+
+    app = _app_with_pool()
+    partial = _plays(*_TRICK_PLAYS[:3])
+    ev = PlayEvent(zone="bottom", cards=(Card(rank=8, suit=1),), count=1,
+                   confidence=0.2, frame_agreement=0.2,
+                   trick_index=0, frame_ts=1.3)
+    item = app.pending.add_low_confidence(ev, 0)
+    app._commit([*partial, item,
+                 TrickEndEvent(trick_index=0, frame_ts=1.4, plays=partial)])
+    return app, item
+
+
+def test_pending_event_is_queued_and_counted_without_polluting_records():
+    """§10.2 断言 1/2：事件一条不丢、队列按时点有序、且不污染确定记录。"""
+    app, item = _intervened_app()
+
+    assert app.pending.items == (item,)
+    assert app.session.pending_count == 1
+    assert app.session.low_confidence_count == 1
+    # 低置信那一手不进确定记录，也不在本墩的 plays 里
+    assert len(app.session.history[0].plays) == 3
+
+
+def test_correction_replays_to_same_state_as_uninterrupted():
+    """§10.2 断言 3：纠正重放后的状态必须与"无低置信介入"的参照序列**一致**。
+
+    这是整个纠正面板的核心正确性 —— 若重放结果与参照不一致，
+    用户每纠正一次，账面就被改歪一点，而且看不出是纠正引起的。
+    """
+    from shengji.cards import Card
+
+    ref = _reference_app()
+    app, item = _intervened_app()
+
+    # 纠正前：缺一手 → 先不算分，不猜赢家
+    assert app.session.history[0].points_known is False
+    assert app.session.points["bottom"] == 0
+
+    assert app.resolve_pending(item, [Card(rank=8, suit=1)]) is True
+
+    assert app.pending.items == ()
+    assert app.session.pending_count == 0
+
+    assert app.session.trick_index == ref.session.trick_index
+    assert len(app.session.history) == len(ref.session.history)
+    assert app.session.points == ref.session.points
+    assert app.session.history[0].winner_zone == ref.session.history[0].winner_zone
+    assert app.session.history[0].points == ref.session.history[0].points
+    assert app.session.history[0].points_known is True
+    assert (app.pool.as_counter() == ref.pool.as_counter())
+    assert app.own_hand_remaining() == ref.own_hand_remaining()
+
+
+def test_correction_reports_what_was_filled_in():
+    """补录必须留下可读的回执 —— 否则用户不知道自己的操作生效了没有。"""
+    from shengji.cards import Card
+
+    app, item = _intervened_app()
+    app.resolve_pending(item, [Card(rank=8, suit=1)])
+
+    assert "已补录" in app.session.last_message
+    assert "第 1 墩" in app.session.last_message
+    assert "♥8" in app.session.last_message
+
+
+def test_drop_removes_item_without_scoring():
+    """用户明确放弃记账：从队列移除、该墩保持"分牌未知"，不硬算。"""
+    app, item = _intervened_app()
+
+    assert app.resolve_pending(item, drop=True) is True
+
+    assert app.pending.items == ()
+    assert app.session.pending_count == 0
+    assert app.session.history[0].points_known is False
+    assert "已跳过" in app.session.last_message
+
+
+def test_resolving_an_unknown_item_is_refused():
+    """不在日志里的项不能被"处理掉" —— 防止把别人的项误删。"""
+    app, _ = _intervened_app()
+    stranger = PendingQueue()
+    item = stranger.add(PendingItem(
+        frame_ts=1.0, reason="low_confidence", zone="top", seat=None,
+        proposed_cards=(), confidence=0.1, frame_agreement=0.1,
+        evidence_path="", trick_index=0))
+
+    assert app.resolve_pending(item, []) is False
+
+
+def test_correction_does_not_lose_the_trump():
+    """重建会新建 SessionState —— 主牌这类**非派生**字段必须先收回 ctx。
+
+    否则"纠正一次，主牌就丢了"，之后所有墩都算不了分。
+    """
+    from shengji.cards import Card
+
+    app, item = _intervened_app()
+    assert app.session.trump is not None
+
+    app.resolve_pending(item, [Card(rank=8, suit=1)])
+
+    assert app.session.trump is not None
+    assert app.session.trump.suit == 0          # ♠
+    assert app.session.trump.level_rank == 2
+
+
+def test_correction_preserves_paused_state():
+    app, item = _intervened_app()
+    app.session.paused = True
+
+    app.resolve_pending(item, drop=True)
+
+    assert app.session.paused is True
+
+
+def test_pending_items_are_processed_oldest_first():
+    """队列按 frame_ts 有序，纠正面板一次只处理队首 —— 顺序不能乱。"""
+    from shengji.cards import Card
+
+    app = _app_with_pool()
+    ev_new = PlayEvent(zone="top", cards=(Card(rank=9, suit=1),), count=1,
+                       confidence=0.2, frame_agreement=0.2,
+                       trick_index=1, frame_ts=5.0)
+    ev_old = PlayEvent(zone="left", cards=(Card(rank=4, suit=1),), count=1,
+                       confidence=0.2, frame_agreement=0.2,
+                       trick_index=0, frame_ts=2.0)
+    item_new = app.pending.add_low_confidence(ev_new, 2)
+    item_old = app.pending.add_low_confidence(ev_old, 3)
+    app._commit([item_new, item_old])
+
+    assert app.pending_first is item_old
+    app.resolve_pending(item_old, [Card(rank=4, suit=1)])
+    assert app.pending_first is item_new
+
+
+def test_overlay_submit_reaches_the_app(qtbot):
+    """面板点击 → 应用控制器处理队首项。
+
+    这条接线断了的话，面板就只是个摆设：能点、能选，但什么都不会发生。
+    """
+    from shengji.cards import Card
+    from shengji.ui.overlay import OverlayWindow
+
+    overlay = OverlayWindow()
+    qtbot.addWidget(overlay)
+    app = _app([], overlay=overlay)
+    hand = [Card(rank=r, suit=s) for r in range(2, 15) for s in range(2)][:25]
+    app.init_pool(hand)
+    app.session.trump = parse_trump("S2")
+
+    partial = _plays(*_TRICK_PLAYS[:3])
+    ev = PlayEvent(zone="bottom", cards=(Card(rank=8, suit=1),), count=1,
+                   confidence=0.2, frame_agreement=0.2,
+                   trick_index=0, frame_ts=1.3)
+    item = app.pending.add_low_confidence(ev, 0)
+    app._commit([*partial, item,
+                 TrickEndEvent(trick_index=0, frame_ts=1.4, plays=partial)])
+
+    overlay.apply_interactive(True)
+    app.refresh()                       # 把队首项推给面板
+
+    assert overlay.correction_panel.isVisibleTo(overlay)
+    assert "自己" in overlay.correction_texts()[0]
+
+    overlay.card_button(Card(rank=8, suit=1)).click()
+    overlay.submit_button.click()
+
+    assert app.pending.items == ()
+    assert app.session.history[0].points_known is True
+    assert app.session.points["bottom"] == 5        # ♥8 压过 ♥7，本墩 5 分归自己

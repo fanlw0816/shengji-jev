@@ -11,17 +11,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from functools import partial
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from ..cards import RANK_LABELS, SUIT_LABELS, Card
+from .correction import GRID_RANKS, GRID_SUITS, CardSelection, PendingRow
 from .viewmodel import OverlayView
 
 LEVEL_COLORS = {
@@ -39,7 +46,20 @@ QFrame#panel {
 QLabel { color: #e6edf3; }
 QLabel#title { color: #9ecbff; font-weight: bold; }
 QLabel#footer { color: #8b98a8; }
+QLabel#correctionHead { color: #ffc857; font-weight: bold; }
+QPushButton {
+    background-color: rgba(50, 60, 78, 220);
+    color: #e6edf3;
+    border: 1px solid rgba(120, 140, 180, 160);
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+QPushButton:disabled { color: #6b7686; background-color: rgba(38, 44, 56, 180); }
+QPushButton:hover:enabled { background-color: rgba(70, 84, 108, 230); }
 """
+
+#: 纠正面板单张牌按钮的选中态配色（深底亮字，与整体深色面板一致）
+CARD_SELECTED_QSS = "background-color: #2f6b4f; color: #eafff2;"
 
 
 def window_flags(interactive: bool) -> Qt.WindowType:
@@ -59,6 +79,8 @@ class OverlayWindow(QWidget):
                  opacity: float = 0.92, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._interactive = interactive
+        self._correction_handler: (
+            Callable[[list[Card], bool], None] | None) = None
         self.setWindowTitle("升级记牌器")
         self.setWindowOpacity(opacity)
         self.setWindowFlags(window_flags(interactive))
@@ -123,7 +145,85 @@ class OverlayWindow(QWidget):
         self.footer_label.setFont(mono)
         v.addWidget(self.footer_label)
 
-        self.setMinimumWidth(430)
+        self._build_correction_panel(v)
+
+        self.setMinimumWidth(470)
+
+    def _build_correction_panel(self, parent_layout: QVBoxLayout) -> None:
+        """纠正面板（设计文档 §9.1 / §14.1）—— 只在交互模式下可见。
+
+        面板本身不含业务判断：待确认项的文案由 `ui/correction.py` 算好，
+        本类只负责画出来，并把点击翻译成一次回调。
+        """
+        self.correction_panel = QWidget(self.panel)
+        v = QVBoxLayout(self.correction_panel)
+        v.setContentsMargins(0, 8, 0, 0)
+        v.setSpacing(4)
+
+        self.correction_head = QLabel("", self.correction_panel)
+        self.correction_head.setObjectName("correctionHead")
+        self.correction_head.setWordWrap(True)
+        v.addWidget(self.correction_head)
+
+        self.correction_proposed = QLabel("", self.correction_panel)
+        self.correction_proposed.setWordWrap(True)
+        v.addWidget(self.correction_proposed)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(2)
+        grid.setVerticalSpacing(2)
+        self._card_buttons: dict[Card, QPushButton] = {}
+        self._card_base_labels: dict[Card, str] = {}
+        for r, suit in enumerate(GRID_SUITS):
+            grid.addWidget(QLabel(SUIT_LABELS[suit], self.correction_panel), r, 0)
+            for c, rank in enumerate(GRID_RANKS, start=1):
+                self._add_card_button(grid, r, c, Card(rank=rank, suit=suit),
+                                      RANK_LABELS[rank])
+        joker_row = len(GRID_SUITS)
+        grid.addWidget(QLabel("王", self.correction_panel), joker_row, 0)
+        for c, card in enumerate((Card.small_joker(), Card.big_joker()), start=1):
+            self._add_card_button(grid, joker_row, c, card, card.label())
+        v.addLayout(grid)
+
+        self.correction_selection = QLabel("", self.correction_panel)
+        self.correction_selection.setWordWrap(True)
+        v.addWidget(self.correction_selection)
+
+        buttons = QHBoxLayout()
+        self.accept_button = QPushButton("采纳识别结果", self.correction_panel)
+        self.accept_button.clicked.connect(self._on_accept_clicked)
+        buttons.addWidget(self.accept_button)
+
+        self.submit_button = QPushButton("提交所选", self.correction_panel)
+        self.submit_button.clicked.connect(self._on_submit_clicked)
+        buttons.addWidget(self.submit_button)
+
+        self.skip_button = QPushButton("跳过不记账", self.correction_panel)
+        self.skip_button.clicked.connect(self._on_skip_clicked)
+        buttons.addWidget(self.skip_button)
+        v.addLayout(buttons)
+
+        parent_layout.addWidget(self.correction_panel)
+
+        # 纯 UI 编辑状态（"选了几张"的语义在 ui/correction.py 里）
+        self._selection = CardSelection()
+        self._current_row: PendingRow | None = None
+        self._correction_key: object | None = None
+        self.correction_panel.setVisible(False)
+        self._refresh_selection()
+
+    def _add_card_button(self, grid: QGridLayout, r: int, c: int,
+                         card: Card, label: str) -> None:
+        btn = QPushButton(label, self.correction_panel)
+        btn.setFixedSize(30, 22)
+        font = QFont("Consolas")
+        font.setPointSize(8)
+        btn.setFont(font)
+        btn.setToolTip(f"{card.label()}（点击循环 0→1→2→0）")
+        btn.clicked.connect(partial(self._on_card_clicked, card))
+        grid.addWidget(btn, r, c)
+        self._card_buttons[card] = btn
+        self._card_base_labels[card] = label
 
     # ---------- 交互模式 ----------
 
@@ -143,12 +243,108 @@ class OverlayWindow(QWidget):
         self._interactive = bool(interactive)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, not self._interactive)
         self.setWindowFlags(window_flags(self._interactive))
+        if hasattr(self, "correction_panel"):
+            # 面板只在交互模式下露出 —— 非交互时它既看不见也点不到，
+            # 留着只会撑大窗口、挡住游戏
+            self._sync_correction_visibility()
         if self.isVisible():
             self.show()
 
     def toggle_interactive(self) -> bool:
         self.apply_interactive(not self._interactive)
         return self._interactive
+
+    # ---------- 纠正面板 ----------
+
+    def set_correction_handler(
+            self, handler: Callable[[list[Card], bool], None] | None) -> None:
+        """注册"用户提交了一项纠正"的回调：`handler(cards, drop)`。
+
+        `drop=True` 表示用户明确放弃记账（此时 `cards` 为空）。
+        面板不直接改任何状态，只把意图交出去 —— 怎么应用是应用控制器的事。
+        """
+        self._correction_handler = handler
+
+    def set_correction(self, row: PendingRow | None, *,
+                       pending_total: int = 0,
+                       key: object | None = None) -> None:
+        """渲染队首待确认项。
+
+        `key` 用来判断"还是不是同一项"：`refresh()` 每帧都会调用本方法，
+        若不比较 key 就重置选择，用户刚点的牌会在下一帧被清空。
+        """
+        if row is None:
+            self._current_row = None
+            self._correction_key = None
+            self.correction_panel.setVisible(False)
+            return
+
+        if key is None or key != self._correction_key:
+            self._correction_key = key
+            self._current_row = row
+            self._selection.clear()
+            self._refresh_selection()
+        else:
+            self._current_row = row
+
+        total = max(pending_total, row.index + 1)
+        self.correction_head.setText(
+            f"待确认 {row.index + 1}/{total} · {row.headline()}")
+        self.correction_proposed.setText(row.proposed_text())
+        self.accept_button.setEnabled(row.can_accept_proposed)
+        self._sync_correction_visibility()
+        self.adjustSize()
+
+    def _sync_correction_visibility(self) -> None:
+        self.correction_panel.setVisible(
+            self._interactive and self._current_row is not None)
+
+    def _on_card_clicked(self, card: Card) -> None:
+        self._selection.toggle(card)
+        self._refresh_selection()
+
+    def _refresh_selection(self) -> None:
+        for card, btn in self._card_buttons.items():
+            n = self._selection.count(card)
+            base = self._card_base_labels[card]
+            btn.setText(base if n <= 1 else f"{base}×{n}")
+            btn.setStyleSheet(CARD_SELECTED_QSS if n else "")
+        self.correction_selection.setText(self._selection.text())
+        self.submit_button.setEnabled(not self._selection.is_empty)
+
+    def _on_accept_clicked(self) -> None:
+        row = self._current_row
+        if row is None or not row.can_accept_proposed:
+            return
+        self._emit_correction(list(row.proposed), False)
+
+    def _on_submit_clicked(self) -> None:
+        if self._selection.is_empty:
+            return
+        self._emit_correction(self._selection.cards(), False)
+
+    def _on_skip_clicked(self) -> None:
+        self._emit_correction([], True)
+
+    def _emit_correction(self, cards: Sequence[Card], drop: bool) -> None:
+        if self._correction_handler is None:
+            return
+        self._correction_handler(list(cards), drop)
+
+    # ---------- 纠正面板的测试入口 ----------
+
+    def correction_cards(self) -> list[Card]:
+        """当前点选出的牌（供测试与调试读取）。"""
+        return self._selection.cards()
+
+    def card_button(self, card: Card) -> QPushButton | None:
+        """某个牌格子的按钮（供测试与调试读取）。"""
+        return self._card_buttons.get(card)
+
+    def correction_texts(self) -> tuple[str, str, str]:
+        """(标题, 识别结果, 已选) 三行文案。"""
+        return (self.correction_head.text(), self.correction_proposed.text(),
+                self.correction_selection.text())
 
     # ---------- 渲染 ----------
 

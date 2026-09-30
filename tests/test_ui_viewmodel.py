@@ -158,6 +158,38 @@ def test_build_view_pending_text_only_when_pending():
     assert "漏抓 1" in text
 
 
+def test_build_view_reports_unscored_tricks():
+    """有墩没算分必须说出来 —— 用户看到分数少了，得知道那是可补的。"""
+    from shengji.events.types import TrickEndEvent
+
+    s = SessionState(trump=TrumpInfo(kind="suit", suit=S, level_rank=2))
+    for zone, rank, ts in (("bottom", 10, 1.0), ("right", 5, 1.1)):
+        s.apply(PlayEvent(zone=zone, cards=(Card(rank=rank, suit=H),), count=1,
+                          confidence=1.0, frame_agreement=1.0,
+                          trick_index=0, frame_ts=ts))
+    s.apply(TrickEndEvent(trick_index=0, frame_ts=9.0, plays=()))
+
+    assert s.unscored_tricks == 1
+    assert "1 墩分牌待重算" in build_view(s).pending_text
+
+
+def test_build_view_combines_pending_and_unscored():
+    """两种提示可以同时出现，不要互相覆盖。"""
+    from shengji.events.types import TrickEndEvent
+
+    s = SessionState(trump=TrumpInfo(kind="suit", suit=S, level_rank=2))
+    s.apply(PlayEvent(zone="bottom", cards=(Card(rank=10, suit=H),), count=1,
+                      confidence=1.0, frame_agreement=1.0,
+                      trick_index=0, frame_ts=1.0))
+    s.apply(TrickEndEvent(trick_index=0, frame_ts=9.0, plays=()))
+    s.pending_count = 1
+
+    text = build_view(s).pending_text
+
+    assert "待确认 1" in text
+    assert "1 墩分牌待重算" in text
+
+
 def test_build_view_prefers_pool_over_unseen():
     class _Pool:
         def as_counter(self):
