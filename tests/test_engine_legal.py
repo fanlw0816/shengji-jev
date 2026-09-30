@@ -59,10 +59,11 @@ def _by_structure(res) -> dict[Structure, list]:
 def test_every_enumerated_move_passes_engine_structure_check(spec, trump_suit):
     """枚举出的每一手都要能被 `structure_of` 判为它自己声称的结构。"""
     hand = _hand(spec)
-    res = legal_moves(hand, None, _t(suit=trump_suit), PROFILE)
+    trump = _t(suit=trump_suit)
+    res = legal_moves(hand, None, trump, PROFILE)
     assert res.moves
     for m in res.moves:
-        assert structure_of(m.cards) is m.structure, m.label()
+        assert structure_of(m.cards, trump) is m.structure, m.label()
 
 
 @pytest.mark.parametrize("spec,lead_spec", [
@@ -75,9 +76,10 @@ def test_every_enumerated_move_passes_engine_structure_check(spec, trump_suit):
 def test_follow_moves_pass_engine_structure_check(spec, lead_spec):
     hand = _hand(spec)
     lead_cards = tuple(_hand(lead_spec))
-    res = legal_moves(hand, PlayedCards(seat=1, cards=lead_cards), _t(), PROFILE)
+    trump = _t()
+    res = legal_moves(hand, PlayedCards(seat=1, cards=lead_cards), trump, PROFILE)
     for m in res.moves:
-        assert structure_of(m.cards) is m.structure, m.label()
+        assert structure_of(m.cards, trump) is m.structure, m.label()
         assert len(m.cards) == len(lead_cards)
 
 
@@ -280,3 +282,31 @@ def test_insufficient_hand_for_lead_count_raises():
     lead = PlayedCards(seat=1, cards=(parse_code("HA"),) * 5)
     with pytest.raises(LegalError):
         legal_moves(hand, lead, _t(), PROFILE)
+
+
+# ---------- 连对枚举与墩赢家共用同一份序列定义（2026-09-30）----------
+
+
+def test_lead_enumerates_level_skipping_tractor():
+    """打 10 主 ♠ 时 ♠J♠J + ♠9♠9 是连对，必须被**生成**出来。
+
+    修前 `_tractors` 按「花色 + 裸点数」切段，把 11 与 9 分成两段，
+    于是这个连对压根生成不出来 —— 而 `structure_of` 回验只挡「多生成」、
+    挡不住「漏生成」。这条测试钉的正是那个单向盲区。
+    """
+    trump = _t(suit=S, level=10)
+    res = legal_moves(_hand("SJ SJ S9 S9"), None, trump, PROFILE)
+    tractors = [m for m in res.moves if m.structure is Structure.TRACTOR]
+    assert len(tractors) == 1
+    assert set(tractors[0].codes()) == {"SJ", "S9"}
+
+
+@pytest.mark.parametrize("spec", ["S10 S10 SJ SJ", "S10 S10 S9 S9"])
+def test_lead_does_not_enumerate_tractor_through_level_card(spec):
+    """含级牌的四张不得被枚举成连对（只能是两对或甩牌）。"""
+    trump = _t(suit=S, level=10)
+    res = legal_moves(_hand(spec), None, trump, PROFILE)
+    assert not [m for m in res.moves if m.structure is Structure.TRACTOR]
+    four = [m for m in res.moves if len(m.cards) == 4]
+    assert four, spec
+    assert all(m.structure is Structure.MIXED for m in four), spec

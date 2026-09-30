@@ -8,15 +8,19 @@
     大王 > 小王
          > 正级（主花色 L）
          > 副级（其余三门的 L）
-         > 主花色 A > K > Q > J > 10 > ... > 2   （跳过 L）
-         > 任意副牌（每门内 A > K > ... > 2）
+         > 主花色的其余点数：A > K > Q > J > ... > 2   （**不含 L**，L 已提升为正级）
+         > 任意副牌（每门内 A > K > ... > 2，不含 L）
 
 无主局：大小王为主牌；四门 L 均为主牌，无正/副级之分。
 
 ⚠️ **待实测确认**（设计文档 §7.6.3）：副级三门之间是否可互相比较，
-不同规则集有差异。本模块的默认实现是「副级之间同级、不可互压」
-（`TrumpInfo.off_level_ordered=False`），可通过参数切换为按花色次序比较。
-该差异**直接影响墩赢家与分牌归属**，必须用实际客户端对局验证。
+不同规则集有差异。本模块的当前实现是「副级之间同级、不可互压」
+（`card_strength` 对四门级牌一律返回 `(TIER_OFF_LEVEL, 0)`）。
+
+⚠️ 但**没有**可供切换的开关 —— 早期文档写过一个 `TrumpInfo.off_level_ordered`
+参数，那个字段**从未实现**（2026-09-30 查明，全仓只有 docstring 提到它）。
+要切换只能改 `card_strength` 本身。该差异**直接影响墩赢家与分牌归属**，
+必须用实际客户端对局验证。
 """
 
 from __future__ import annotations
@@ -101,6 +105,40 @@ def card_strength(card: Card, trump: TrumpInfo) -> tuple[int, int]:
     if trump.kind == "suit" and card.suit == trump.suit:
         return (TIER_TRUMP_SUIT, card.rank)
     return (TIER_SIDE, card.rank)
+
+
+def sequence_index(card: Card, trump: TrumpInfo) -> int | None:
+    """牌在其所属分组「连对序列」中的位置；**不参与连对则返回 None**。
+
+    这是连对（拖拉机）判定的**唯一序列定义**，由 `engine/trick.py`（墩赢家）与
+    `engine/legal.py`（合法着法枚举）共用 —— 两处各写一份「连续」的定义，
+    迟早会出现「枚举说合法、算赢家说不匹配」这类最难查的不一致。
+
+    位置值只在**同一分组内**可比（同分组内不同牌的位置必不相同），
+    故调用方必须先确认各对属于同一分组，再比较位置是否相差 1。
+
+    三类牌**不参与**连对，返回 `None`：
+
+    - **大小王** —— 没有点数序列
+    - **级牌（任何花色）** —— 正级自成一层（在主花色内提升到副级之上），
+      副级四门同级。级牌与同门其余点数之间没有「相邻」可言
+    - 由此导出：**副级之间也不参与**（同级无先后次序）
+
+    主花色的其余点数按「级牌被挖掉」后的次序编号：等级数以上的点数整体下移一位。
+    打 10 主 ♠ 时 ♠9 → 9、♠J → 10、♠Q → 11，于是 **♠J♠J + ♠9♠9 是连对**
+    （设计文档 §7.6 的次序本身就把 ♠10 从主花色序列里提走了）。
+
+    ⚠️ 「级牌被挖掉后仍算连续」这一取值属 `RuleProfile.tractor_skips_level`，
+    **未经实测确认**（todo.md「连对（拖拉机）的级牌语义」）。若 Phase 0 实测相反，
+    改这里一处即可 —— 枚举与赢家会一起变，因为它们共用本函数。
+    """
+    if is_joker(card):
+        return None
+    if card.rank == trump.level_rank:
+        return None
+    if trump.kind == "suit" and card.suit == trump.suit and card.rank > trump.level_rank:
+        return card.rank - 1
+    return card.rank
 
 
 def compare(cards_a: tuple[Card, ...], cards_b: tuple[Card, ...],

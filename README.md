@@ -25,7 +25,7 @@
 | Plan 6 | 按家推断（功能 B） | ✅ **已实现并验证**（引擎 31 项 + UI 接线断言全部执行通过） |
 | Plan 7 | **推荐出牌**（功能 D） | 🟡 **7a 合法着法枚举已实现并验收**；7b/7c/7d 未实现（设计稿见 [Plan 7](docs/superpowers/plans/2026-09-29-play-recommendation.md)） |
 
-**当前测试：516 项**（`uv run pytest`）。静态检查：`uv run ruff check src tests`、`uv run mypy` 均无告警。
+**当前测试：533 项**（`uv run pytest`）。静态检查：`uv run ruff check src tests`、`uv run mypy` 均无告警。
 
 > 📌 **关于 numpy 版本上限**：numpy 自 **2.4.0** 起把官方 wheel 的编译基线抬到
 > **x86-64-v2**（要求 SSE4.2 + POPCNT）。若在 KVM/VMware 等虚拟机里跑、且 hypervisor
@@ -42,7 +42,7 @@
 
 ```bash
 uv sync                 # 建虚拟环境并安装依赖（含可编辑安装本项目）
-uv run pytest -q        # 跑测试（516 项，含 4 张真实截图的端到端验收）
+uv run pytest -q        # 跑测试（533 项，含 4 张真实截图的端到端验收）
 uv run ruff check src tests   # 风格与常见缺陷
 uv run mypy                   # 类型检查
 ```
@@ -303,7 +303,7 @@ src/shengji/
   tools/            dump_layout(布局标注) · record(采样录制) · label_templates · run_counter
 
 calib.example.json  示例标定（格式说明 + 标定模板，与参考布局一致）
-tests/              516 项测试
+tests/              533 项测试
   fixtures/screenshots/   4 张真实截图（端到端验收的数据源）
   fixtures/scenarios/     7 条离线事件语料（边界场面，见 docs）
 spike/              实测脚本与性能证据（非产品代码）

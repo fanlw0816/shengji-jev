@@ -11,6 +11,19 @@
 完整规则需要判断甩牌的合法性（是否都是同花色最大）以及各家跟牌的结构匹配，
 规则复杂且地区差异大。本模块对甩牌返回 `confident=False`，
 由上层走人工确认流程（设计文档 §9.1 的「宁可让你点一下，也不静默算错」）。
+
+⚠️ **结构判定需要 `trump`**：连对（拖拉机）的「连续」是在**所属分组的序列**上说的，
+不是裸点数相邻。早期实现只比整数点差、也不看分组，导致两类**自信算错**
+（2026-09-30 修）：
+
+| 情形（打 10、主 ♠） | 修前 | 修后 | 错在哪 |
+|---|---|---|---|
+| ♥10♥10 + ♥9♥9 | `TRACTOR` | `MIXED` | 跨组 —— ♥10 是副级（主牌组），♥9 是 ♥ 组，两张牌不在同一组，根本不可比 |
+| ♠10♠10 + ♠J♠J | `TRACTOR` | `MIXED` | 级牌不参与连对 —— ♠10 是正级，与主花色其余点数不在同一层 |
+| ♠10♠10 + ♠9♠9 | `TRACTOR` | `MIXED` | 同上 |
+| ♠J♠J + ♠9♠9 | `MIXED` | `TRACTOR` | 漏判 —— ♠10 被挖走后 ♠J 与 ♠9 在主花色序列上相邻 |
+
+序列定义集中在 `trump.sequence_index()`，与 `engine/legal.py` 的枚举共用。
 """
 
 from __future__ import annotations
@@ -24,6 +37,7 @@ from .trump import (
     TrumpInfo,
     _top_of,
     group_of,
+    sequence_index,
 )
 
 
@@ -49,8 +63,14 @@ class TrickOutcome:
     note: str = ""
 
 
-def structure_of(cards: tuple[Card, ...]) -> Structure:
-    """判断一组牌的结构。"""
+def structure_of(cards: tuple[Card, ...], trump: TrumpInfo) -> Structure:
+    """判断一组牌的结构。
+
+    `trump` 是**必需参数**（不给默认值）：连对的「连续」依赖分组与级牌，
+    不给主牌信息就只能退回裸点数相邻 —— 那正是 2026-09-30 修掉的那类自信算错
+    （见模块 docstring 的表）。强制传参让「忘了传」在调用点就暴露，
+    而不是在真实牌局里静默算错。
+    """
     n = len(cards)
     if n == 0:
         raise ValueError("空出牌")
@@ -59,12 +79,13 @@ def structure_of(cards: tuple[Card, ...]) -> Structure:
     if n == 2:
         return Structure.PAIR if _same_face(cards[0], cards[1]) else Structure.MIXED
     # 4 张及以上：检查是否为连对（拖拉机）
-    if n % 2 == 0 and _is_tractor(cards):
+    if n % 2 == 0 and _is_tractor(cards, trump):
         return Structure.TRACTOR
     return Structure.MIXED
 
 
-def structure_matches(cards: tuple[Card, ...], lead_structure: Structure) -> bool:
+def structure_matches(cards: tuple[Card, ...], lead_structure: Structure,
+                      trump: TrumpInfo) -> bool:
     """跟牌的结构是否足以赢过该领出结构（设计文档 §7.3）。
 
     抽成独立函数是为了让**合法着法枚举（`engine/legal.py`）与墩赢家共用同一份判定** ——
@@ -78,7 +99,7 @@ def structure_matches(cards: tuple[Card, ...], lead_structure: Structure) -> boo
         return False
     if lead_structure is Structure.MIXED:
         return True
-    return structure_of(cards) is lead_structure
+    return structure_of(cards, trump) is lead_structure
 
 
 def _same_face(a: Card, b: Card) -> bool:
@@ -87,10 +108,19 @@ def _same_face(a: Card, b: Card) -> bool:
     return a.rank == b.rank and a.suit == b.suit
 
 
-def _is_tractor(cards: tuple[Card, ...]) -> bool:
-    """是否为连对：每两张成一对，且各对点数连续、花色相同。
+def _is_tractor(cards: tuple[Card, ...], trump: TrumpInfo) -> bool:
+    """是否为连对。
 
-    大小王算特殊情况：大王对与小王对不构成拖拉机（点数不连续语义不同）。
+    三条**都必须满足**（2026-09-30 补后两条，此前只比裸点数差、不看分组）：
+
+    1. 每两张成一对（同花色同点数）
+    2. **同一分组** —— 四门级牌都属主牌组，于是打 10 主 ♠ 时
+       ♥10♥10 + ♥9♥9 是「副级对 + ♥ 副牌对」，跨组不可比，不是连对
+    3. 各对在**组内连对序列**上连续 —— 交给 `trump.sequence_index()`，
+       它同时表达「级牌不参与连对」与「主花色挖掉级牌后其余点数连续」
+
+    大小王：同色王成对（走 `_same_face` 的第 1 条）但 `sequence_index` 返回 None，
+    故 4 张王不构成连对，与旧行为一致。
     """
     n = len(cards)
     pairs: list[Card] = []
@@ -100,11 +130,18 @@ def _is_tractor(cards: tuple[Card, ...]) -> bool:
         pairs.append(cards[i])
     if any(p.joker for p in pairs):
         return False
-    suits = {p.suit for p in pairs}
-    if len(suits) != 1:
+    if len({group_of(p, trump) for p in pairs}) != 1:
         return False
-    ranks = sorted(p.rank for p in pairs)
-    return all(ranks[i + 1] - ranks[i] == 1 for i in range(len(ranks) - 1))
+
+    idx: list[int] = []
+    for p in pairs:
+        pos = sequence_index(p, trump)
+        if pos is None:
+            return False        # 级牌 / 副级 / 王：不在任何连对序列里
+        idx.append(pos)
+    idx.sort()
+    # 同一对点数重复（如两副牌的 4 张 ♠5 拆成两对）差为 0，在此被拒
+    return all(idx[i + 1] - idx[i] == 1 for i in range(len(idx) - 1))
 
 
 def _can_beat_lead(play: PlayedCards, lead_group: int, trump: TrumpInfo) -> bool:
@@ -126,7 +163,7 @@ def winning_seat(plays: list[PlayedCards], trump: TrumpInfo) -> TrickOutcome:
     if not plays:
         raise ValueError("无出牌")
     lead = plays[0]
-    lead_struct = structure_of(lead.cards)
+    lead_struct = structure_of(lead.cards, trump)
     lead_group = group_of(lead.cards[0], trump)
 
     if lead_struct is Structure.MIXED:
@@ -140,7 +177,7 @@ def winning_seat(plays: list[PlayedCards], trump: TrumpInfo) -> TrickOutcome:
     best_seat: int | None = None
     best_key: tuple[int, ...] | None = None
     for p in plays:
-        if not structure_matches(p.cards, lead_struct):
+        if not structure_matches(p.cards, lead_struct, trump):
             continue
         if not _can_beat_lead(p, lead_group, trump):
             continue

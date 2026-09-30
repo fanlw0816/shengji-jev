@@ -35,7 +35,7 @@ from itertools import combinations
 
 from ..cards import Card
 from .trick import PlayedCards, Structure, structure_matches, structure_of
-from .trump import TrumpInfo, group_of, sort_desc
+from .trump import TrumpInfo, group_of, sequence_index, sort_desc
 
 MAX_COMBOS = 100_000
 """枚举上限：候选组合数超过此值就**报错拒绝**，而不是悄悄截断。
@@ -78,13 +78,17 @@ class RuleProfile:
     throw_max_cards: int = 8
     """甩牌最大张数。⚠️ 8 只是性能估算用的假设值（设计文档 §3 最坏场景），**未实测**。"""
 
-    tractor_skips_level: bool = False
+    tractor_skips_level: bool = True
     """主花色连对是否把级牌「挖掉」后仍算连续。
 
-    ⚠️ 现取 False，与 `trick.py._is_tractor` 的**现行行为一致** ——
-    两者必须同时改，否则 §3 的自洽校验会失败（有测试盯着）。
-    另注：现行 `structure_of` 不含级牌语义，已知与真实规则存在**双向偏差**
-    （漏判 ♠J♠J♠9♠9、误判含级牌的连对），详见 todo.md 的未决项。"""
+    ⚠️ 现取 True —— 与 `trick.py._is_tractor` / `trump.sequence_index()` 的
+    **现行行为一致**，也与设计文档 §7.6 的牌力次序自洽（级牌自成一层，
+    主花色其余点数在它之上/之下各自连续）。两者必须同时改，否则 §3 的
+    自洽校验会失败（有测试盯着）。
+
+    但仍属 **UNVERIFIED**：级牌语义未经过实测确认（todo.md 的未决项）。
+    要改的话**只改 `trump.sequence_index` 一处** —— 墩赢家与合法枚举共用它，
+    改一处两边一起变；这个字段只是把取值记下来备查。"""
 
     source: str = "UNVERIFIED"
     """`"documented"` | `"measured"` | `"UNVERIFIED"`。"""
@@ -202,7 +206,7 @@ def _follow_moves(cards: list[Card], lead: PlayedCards, trump: TrumpInfo,
                   profile: RuleProfile, max_combos: int) -> LegalMoves:
     n = len(lead.cards)
     lead_group = group_of(lead.cards[0], trump)
-    lead_struct = structure_of(lead.cards)
+    lead_struct = structure_of(lead.cards, trump)
 
     in_group = [c for c in cards if group_of(c, trump) == lead_group]
 
@@ -272,8 +276,8 @@ def _combos_of(pool: list[Card], n: int, lead_struct: Structure, lead_group: int
         if key in seen:
             continue
         seen.add(key)
-        out.append(Move(cards, structure_of(cards), lead_group,
-                        structure_matches(cards, lead_struct)))
+        out.append(Move(cards, structure_of(cards, trump), lead_group,
+                        structure_matches(cards, lead_struct, trump)))
     return LegalMoves(tuple(out), True)
 
 
@@ -297,8 +301,8 @@ def _pad_moves(in_group: list[Card], rest: list[Card], need: int,
         if key in seen:
             continue
         seen.add(key)
-        out.append(Move(cards, structure_of(cards), lead_group,
-                        structure_matches(cards, lead_struct)))
+        out.append(Move(cards, structure_of(cards, trump), lead_group,
+                        structure_matches(cards, lead_struct, trump)))
     return LegalMoves(tuple(out), True)
 
 
@@ -329,7 +333,7 @@ def _throws(cards: list[Card], trump: TrumpInfo, profile: RuleProfile,
             # 只可能是「从大到小的最大若干张」这一串前缀
             for k in range(2, min(len(ordered), limit) + 1):
                 cand = tuple(ordered[:k])
-                if structure_of(cand) is not Structure.MIXED:
+                if structure_of(cand, trump) is not Structure.MIXED:
                     continue        # 对子 / 拖拉机不是甩牌，已在前两类里枚举
                 out.append(Move(cand, Structure.MIXED, group, True, verified=False,
                                 note="甩牌合法性依赖别家手牌，本机无法判定"))
@@ -361,28 +365,41 @@ def _pairs(counts: Counter[Card]) -> list[Card]:
 def _tractors(counts: Counter[Card], trump: TrumpInfo) -> list[tuple[Card, ...]]:
     """枚举全部连对（拖拉机）。
 
-    生成后用 `structure_of` **回验**（Plan 7 §3 的自洽校验）：
-    只有被引擎判为 `TRACTOR` 的才输出。这样即使日后规则取值变化
-    （如 `tractor_skips_level`），枚举与此处的判定也**不会各自漂移**。
+    按「**分组 + 组内序列位置**」切连续段，而不是按「花色 + 裸点数」——
+    后者会漏掉主花色的跳级连对（打 10 主 ♠ 时 ♠J♠J + ♠9♠9），
+    而回验只能挡住**多生成**、挡不住**漏生成**（Plan 7 §3 的自洽校验是单向的，
+    这一点在 2026-09-30 修 `_is_tractor` 时才发现）。
+
+    生成后仍用 `structure_of` 回验：只有被引擎判为 `TRACTOR` 的才输出。
+    这样即使日后规则取值变化（如 `tractor_skips_level`），枚举与墩赢家
+    也不会各自漂移 —— 两边共用 `trump.sequence_index()`。
     """
+    # 分组 → (组内序列位置 → 该位置的那张牌)
+    paired: dict[int, dict[int, Card]] = {}
+    for c, k in counts.items():
+        if k < 2:
+            continue
+        pos = sequence_index(c, trump)
+        if pos is None:
+            continue        # 级牌 / 副级 / 王不成对参与连对
+        paired.setdefault(group_of(c, trump), {})[pos] = c
+
     out: list[tuple[Card, ...]] = []
-    for suit in range(4):
-        pair_ranks = sorted(r for r in range(2, 15)
-                            if counts.get(Card(rank=r, suit=suit), 0) >= 2)
-        for run in _runs(pair_ranks):
+    for by_pos in paired.values():
+        for run in _runs(sorted(by_pos)):
             for length in range(2, len(run) + 1):
                 for start in range(len(run) - length + 1):
-                    ranks = run[start:start + length]
-                    cand = tuple(Card(rank=r, suit=suit) for r in ranks for _ in range(2))
-                    if structure_of(cand) is Structure.TRACTOR:
+                    seg = run[start:start + length]
+                    cand = tuple(c for p in seg for c in (by_pos[p], by_pos[p]))
+                    if structure_of(cand, trump) is Structure.TRACTOR:
                         out.append(cand)
     return out
 
 
-def _runs(ranks: list[int]) -> Iterator[list[int]]:
-    """把升序点数列切成极大连续段。"""
+def _runs(positions: list[int]) -> Iterator[list[int]]:
+    """把升序的**组内序列位置**列切成极大连续段。"""
     run: list[int] = []
-    for r in ranks:
+    for r in positions:
         if run and r != run[-1] + 1:
             if len(run) >= 2:
                 yield run

@@ -113,7 +113,7 @@ class VoidTracker:
             # 领出本身就跨组（甩牌），跟牌规则不适用
             self.skipped_mixed_leads += 1
             return ()
-        if structure_of(lead.cards) is Structure.MIXED:
+        if structure_of(lead.cards, trump) is Structure.MIXED:
             self.skipped_mixed_leads += 1
             return ()
 
